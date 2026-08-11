@@ -1,0 +1,9 @@
+# Segredos — nunca versionar
+.env
+.trello.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
