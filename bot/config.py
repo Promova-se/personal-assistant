@@ -35,6 +35,16 @@ TRELLO_TOKEN = os.getenv("TRELLO_TOKEN", "").strip()
 # Fuso do usuário (para datas/horários)
 TIMEZONE = os.getenv("TIMEZONE", "America/Sao_Paulo").strip()
 
+# Google Agenda (conta de serviço). O arquivo de chave fica na raiz do projeto
+# e a agenda a acessar é identificada pelo e-mail (compartilhada com a conta
+# de serviço).
+GCAL_KEYFILE = os.getenv(
+    "GCAL_KEYFILE", str(ROOT / "gcal-service-account.json")
+).strip()
+GCAL_CALENDAR_ID = os.getenv("GCAL_CALENDAR_ID", "promovasenet@gmail.com").strip()
+
+GCAL_ENABLED = os.path.exists(GCAL_KEYFILE)
+
 
 def missing() -> list[str]:
     """Retorna a lista de segredos obrigatórios que ainda faltam."""

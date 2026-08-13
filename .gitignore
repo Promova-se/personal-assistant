@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Credencial Google (conta de serviço) — nunca versionar
+gcal-service-account.json

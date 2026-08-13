@@ -203,6 +203,13 @@ _DISPATCH = {
     ),
 }
 
+# Google Agenda (só entra se a credencial existir)
+if config.GCAL_ENABLED:
+    from . import gcal
+
+    TOOLS = TOOLS + gcal.TOOLS
+    _DISPATCH.update(gcal.DISPATCH)
+
 
 def run_tool(name: str, args: dict) -> str:
     """Executa a ferramenta e devolve o resultado como texto."""
