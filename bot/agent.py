@@ -6,6 +6,7 @@ resultado -> Claude responde em texto.
 """
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -35,6 +36,11 @@ def _system_prompt() -> str:
         "Você também tem acesso à Google Agenda dele (gcal_*): ver eventos do dia/semana "
         "e criar/remover compromissos. Ao criar eventos, use ISO 8601 com o fuso "
         f"({config.TIMEZONE}, ou seja -03:00). Ao mostrar a agenda, seja objetivo.\n\n"
+        "Se o Állan enviar uma FOTO (convite, panfleto, print de horário, cartaz), leia "
+        "os dados do evento na imagem (título, data, hora, local) e crie na Google Agenda "
+        "com gcal_create_event, confirmando o que criou. Se faltar um dado essencial "
+        "(data ou hora), pergunte antes de criar em vez de inventar. Considere o ano "
+        "atual se a imagem não informar o ano.\n\n"
         "Regras de segurança: você pode criar e atualizar cards livremente, mas NUNCA "
         "invente dados. Ao concluir ou mover algo importante, confirme brevemente o que "
         "fez. Datas de prazo no Trello costumam ser gravadas às 02:59Z (fim do dia no "
@@ -46,10 +52,39 @@ def reset(chat_id: int) -> None:
     _history.pop(chat_id, None)
 
 
-def handle_message(chat_id: int, text: str) -> str:
-    """Processa uma mensagem do usuário e devolve a resposta em texto."""
+def handle_message(
+    chat_id: int,
+    text: str,
+    image_bytes: bytes | None = None,
+    media_type: str = "image/jpeg",
+) -> str:
+    """Processa uma mensagem do usuário (texto e/ou imagem) e devolve a resposta."""
     msgs = _history.setdefault(chat_id, [])
-    msgs.append({"role": "user", "content": text})
+
+    if image_bytes:
+        b64 = base64.standard_b64encode(image_bytes).decode()
+        legenda = text or (
+            "Extraia o evento desta imagem e adicione à minha Google Agenda. "
+            "Se faltar data ou hora, me pergunte."
+        )
+        msgs.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": b64,
+                        },
+                    },
+                    {"type": "text", "text": legenda},
+                ],
+            }
+        )
+    else:
+        msgs.append({"role": "user", "content": text})
 
     for _ in range(MAX_TOOL_LOOPS):
         resp = _client.messages.create(
