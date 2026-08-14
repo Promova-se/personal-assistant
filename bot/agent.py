@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import anthropic
 
-from . import config, tools
+from . import config, memory, tools
 
 _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
@@ -25,7 +25,7 @@ MAX_TOOL_LOOPS = 8
 
 def _system_prompt() -> str:
     agora = datetime.now(ZoneInfo(config.TIMEZONE))
-    return (
+    base = (
         "Você é o assistente pessoal do Állan, falando por Telegram em português "
         "do Brasil. Seja direto, prático e cordial — respostas curtas, sem enrolação.\n"
         f"Agora: {agora.strftime('%A, %d/%m/%Y %H:%M')} ({config.TIMEZONE}).\n\n"
@@ -50,11 +50,19 @@ def _system_prompt() -> str:
         "Google Agenda (gcal_create_event); se faltar data ou hora, pergunte antes de "
         "criar; assuma o ano atual se a imagem não informar.\n"
         "- Se estiver ambíguo, pergunte o que ele quer.\n\n"
+        "MEMÓRIA: quando o Állan contar algo DURÁVEL sobre ele (preferências, pessoas "
+        "próximas, rotina, metas, restrições, contexto de trabalho), salve com memory_save "
+        "sem alarde. Use a memória abaixo para personalizar suas respostas. Se ele pedir "
+        "'o que você sabe sobre mim', use memory_show; para apagar, memory_forget.\n\n"
         "Regras de segurança: você pode criar e atualizar cards livremente, mas NUNCA "
         "invente dados. Ao concluir ou mover algo importante, confirme brevemente o que "
         "fez. Datas de prazo no Trello costumam ser gravadas às 02:59Z (fim do dia no "
         "horário de Brasília) — respeite esse padrão ao criar prazos 'para hoje/amanhã'."
     )
+    perfil = memory.load()
+    if perfil:
+        base += "\n\n## O que você já sabe sobre o Állan (memória)\n" + perfil
+    return base
 
 
 def reset(chat_id: int) -> None:

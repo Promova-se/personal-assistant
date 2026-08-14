@@ -216,6 +216,12 @@ from . import diet  # noqa: E402
 TOOLS = TOOLS + diet.TOOLS
 _DISPATCH.update(diet.DISPATCH)
 
+# Memória / perfil do usuário (sempre disponível)
+from . import memory  # noqa: E402
+
+TOOLS = TOOLS + memory.TOOLS
+_DISPATCH.update(memory.DISPATCH)
+
 
 def run_tool(name: str, args: dict) -> str:
     """Executa a ferramenta e devolve o resultado como texto."""

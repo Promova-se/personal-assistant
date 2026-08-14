@@ -58,6 +58,9 @@ GCAL_ENABLED = os.path.exists(GCAL_KEYFILE)
 # fora do Git.
 DIET_DB = os.getenv("DIET_DB", str(ROOT / "data" / "meals.db")).strip()
 
+# Memória/perfil do usuário: arquivo que o bot lê sempre e vai preenchendo.
+MEMORY_FILE = os.getenv("MEMORY_FILE", str(ROOT / "data" / "perfil.md")).strip()
+
 # Transcrição de áudio (OpenAI Whisper). Só habilita se a chave existir.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 AUDIO_ENABLED = bool(OPENAI_API_KEY)
