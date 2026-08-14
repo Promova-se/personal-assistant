@@ -10,3 +10,6 @@ venv/
 
 # Credencial Google (conta de serviço) — nunca versionar
 gcal-service-account.json
+
+# Dados locais (histórico de dieta)
+data/

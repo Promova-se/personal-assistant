@@ -45,6 +45,10 @@ GCAL_CALENDAR_ID = os.getenv("GCAL_CALENDAR_ID", "promovasenet@gmail.com").strip
 
 GCAL_ENABLED = os.path.exists(GCAL_KEYFILE)
 
+# Banco de dados local (histórico de refeições da dieta). Persistente no servidor,
+# fora do Git.
+DIET_DB = os.getenv("DIET_DB", str(ROOT / "data" / "meals.db")).strip()
+
 
 def missing() -> list[str]:
     """Retorna a lista de segredos obrigatórios que ainda faltam."""

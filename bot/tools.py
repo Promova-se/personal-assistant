@@ -210,6 +210,12 @@ if config.GCAL_ENABLED:
     TOOLS = TOOLS + gcal.TOOLS
     _DISPATCH.update(gcal.DISPATCH)
 
+# Dieta (SQLite local, sempre disponível)
+from . import diet  # noqa: E402
+
+TOOLS = TOOLS + diet.TOOLS
+_DISPATCH.update(diet.DISPATCH)
+
 
 def run_tool(name: str, args: dict) -> str:
     """Executa a ferramenta e devolve o resultado como texto."""
