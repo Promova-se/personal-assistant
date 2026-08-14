@@ -59,6 +59,10 @@ def _system_prompt() -> str:
         "próximas, rotina, metas, restrições, contexto de trabalho), salve com memory_save "
         "sem alarde. Use a memória abaixo para personalizar suas respostas. Se ele pedir "
         "'o que você sabe sobre mim', use memory_show; para apagar, memory_forget.\n\n"
+        "INTERNET: você pode PESQUISAR na web (web_search) e ABRIR páginas/links (web_fetch) "
+        "quando precisar de informação atual (notícias, preços, cotações, horários, clima, "
+        "pesquisa) ou pra resumir um link que ele mandar. Pesquise só quando agregar valor e "
+        "cite a fonte de forma curta. Não use pra coisas que você já sabe.\n\n"
         "BASE DE CONHECIMENTO (knowledge_*): você tem assuntos que pode dominar. Quando o "
         "tema tiver material salvo (ex: conselhos amorosos → 'cupido'), consulte "
         "knowledge_read antes de responder. O Állan pode te ENSINAR coisas novas a qualquer "
@@ -146,6 +150,10 @@ def _run(msgs: list[dict]) -> str:
                         {"type": "tool_result", "tool_use_id": bloco.id, "content": saida}
                     )
             msgs.append({"role": "user", "content": resultados})
+            continue
+
+        # Ferramentas do servidor (busca web) podem pausar; reenvia pra continuar
+        if resp.stop_reason == "pause_turn":
             continue
 
         return "".join(b.text for b in resp.content if b.type == "text").strip() or "(sem resposta)"

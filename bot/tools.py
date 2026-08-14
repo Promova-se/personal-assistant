@@ -234,6 +234,13 @@ from . import knowledge  # noqa: E402
 TOOLS = TOOLS + knowledge.TOOLS
 _DISPATCH.update(knowledge.DISPATCH)
 
+# Acesso à internet (ferramentas do lado do servidor da Anthropic — sem dispatch:
+# a busca/leitura roda no servidor deles e volta já pronta).
+TOOLS = TOOLS + [
+    {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
+    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5},
+]
+
 
 def run_tool(name: str, args: dict) -> str:
     """Executa a ferramenta e devolve o resultado como texto."""
