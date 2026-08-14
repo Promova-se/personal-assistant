@@ -1,6 +1,7 @@
 """Carrega configuração e segredos a partir de arquivos .env locais."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -42,6 +43,14 @@ GCAL_KEYFILE = os.getenv(
     "GCAL_KEYFILE", str(ROOT / "gcal-service-account.json")
 ).strip()
 GCAL_CALENDAR_ID = os.getenv("GCAL_CALENDAR_ID", "promovasenet@gmail.com").strip()
+
+# Agendas extras: mapa apelido -> ID, em JSON no .env.
+# Ex: GCAL_CALENDARS={"eventos":"abc@group.calendar.google.com","renata":"..."}
+_cals = os.getenv("GCAL_CALENDARS", "").strip()
+try:
+    GCAL_CALENDARS = json.loads(_cals) if _cals else {}
+except json.JSONDecodeError:
+    GCAL_CALENDARS = {}
 
 GCAL_ENABLED = os.path.exists(GCAL_KEYFILE)
 
