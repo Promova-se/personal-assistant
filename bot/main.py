@@ -143,6 +143,70 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(pedaco)
 
 
+def _extrair_texto(nome: str, dados: bytes) -> str | None:
+    """Extrai texto de .txt/.csv/.md/.log/.json ou do .txt dentro de um .zip
+    (export do WhatsApp). Retorna None se não souber ler."""
+    low = nome.lower()
+    if low.endswith(".zip"):
+        import io
+        import zipfile
+
+        try:
+            z = zipfile.ZipFile(io.BytesIO(dados))
+            txts = [n for n in z.namelist() if n.lower().endswith(".txt")]
+            if not txts:
+                return None
+            alvo = next((n for n in txts if "_chat" in n.lower()), txts[0])
+            return z.read(alvo).decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return None
+    if low.endswith((".txt", ".csv", ".md", ".log", ".json", ".text")):
+        return dados.decode("utf-8", errors="replace")
+    # tenta como texto puro
+    try:
+        return dados.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    if not _autorizado(chat_id):
+        await _negar(update, chat_id)
+        return
+
+    doc = update.message.document
+    nome = doc.file_name or "arquivo"
+    if doc.file_size and doc.file_size > 20 * 1024 * 1024:
+        await update.message.reply_text(
+            "Arquivo grande demais (máx 20 MB pelo Telegram). "
+            "No WhatsApp, exporte a conversa como 'Sem mídia'."
+        )
+        return
+
+    arquivo = await doc.get_file()
+    dados = bytes(await arquivo.download_as_bytearray())
+    texto = _extrair_texto(nome, dados)
+    if not texto:
+        await update.message.reply_text(
+            "Não consegui ler esse arquivo. Envie um .txt (export do WhatsApp) ou .zip."
+        )
+        return
+
+    await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    legenda = update.message.caption or ""
+    try:
+        resposta = await asyncio.to_thread(
+            agent.handle_document, chat_id, nome, texto, legenda
+        )
+    except Exception as e:  # noqa: BLE001
+        log.exception("Erro ao processar documento")
+        resposta = f"Deu erro ao analisar o documento: {e}"
+
+    for pedaco in _quebrar(resposta, 4000):
+        await update.message.reply_text(pedaco)
+
+
 async def _negar(update: Update, chat_id: int) -> None:
     log.warning("Chat não autorizado: %s", chat_id)
     await update.message.reply_text(
@@ -170,6 +234,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
+    app.add_handler(MessageHandler(filters.Document.ALL, on_document))
 
     log.info("Assistente no ar (modelo=%s). Ctrl+C para parar.", config.MODEL)
     app.run_polling(allowed_updates=Update.ALL_TYPES)

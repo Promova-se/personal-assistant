@@ -103,6 +103,13 @@ def handle_message(
     else:
         msgs.append({"role": "user", "content": text})
 
+    resposta = _run(msgs)
+    _trim(chat_id)
+    return resposta
+
+
+def _run(msgs: list[dict]) -> str:
+    """Executa o laço de ferramentas sobre a lista de mensagens dada."""
     for _ in range(MAX_TOOL_LOOPS):
         resp = _client.messages.create(
             model=config.MODEL,
@@ -112,8 +119,6 @@ def handle_message(
             output_config={"effort": "low"},
             messages=msgs,
         )
-
-        # Guarda a resposta do assistente (com blocos de tool_use) no histórico
         msgs.append({"role": "assistant", "content": resp.content})
 
         if resp.stop_reason == "tool_use":
@@ -122,22 +127,46 @@ def handle_message(
                 if bloco.type == "tool_use":
                     saida = tools.run_tool(bloco.name, bloco.input or {})
                     resultados.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": bloco.id,
-                            "content": saida,
-                        }
+                        {"type": "tool_result", "tool_use_id": bloco.id, "content": saida}
                     )
             msgs.append({"role": "user", "content": resultados})
-            continue  # deixa o Claude ler os resultados e continuar
+            continue
 
-        # Sem mais ferramentas: junta o texto final
-        texto = "".join(b.text for b in resp.content if b.type == "text").strip()
-        _trim(chat_id)
-        return texto or "(sem resposta)"
+        return "".join(b.text for b in resp.content if b.type == "text").strip() or "(sem resposta)"
 
-    _trim(chat_id)
     return "Precisei de muitos passos e parei por segurança. Pode reformular?"
+
+
+def handle_document(
+    chat_id: int, filename: str, content: str, instruction: str = ""
+) -> str:
+    """Lê um documento anexado (ex: export de conversa), resume e aprende — sem
+    guardar o texto gigante no histórico."""
+    msgs = _history.setdefault(chat_id, [])
+    MAX_CHARS = 400_000
+    truncado = len(content) > MAX_CHARS
+    if truncado:
+        content = content[:MAX_CHARS]
+    pedido = instruction.strip() or (
+        "Resuma este conteúdo e liste os PRINCIPAIS PONTOS DE ATENÇÃO (pendências, "
+        "decisões, prazos, cobranças, riscos, quem espera algo de mim). Se houver algo "
+        "durável sobre mim, memorize com memory_save."
+    )
+    if truncado:
+        pedido += "\n(Obs: conteúdo cortado por tamanho; resuma o que veio.)"
+    prompt = f"Documento anexado: {filename}\n{pedido}\n\n--- CONTEÚDO ---\n{content}"
+
+    # Roda numa cópia do histórico para NÃO persistir o texto gigante
+    work = msgs + [{"role": "user", "content": prompt}]
+    resposta = _run(work)
+
+    # No histórico real, guarda só um registro compacto + a resposta
+    msgs.append(
+        {"role": "user", "content": f"[Enviei o documento '{filename}' e pedi um resumo/análise.]"}
+    )
+    msgs.append({"role": "assistant", "content": resposta})
+    _trim(chat_id)
+    return resposta
 
 
 def _trim(chat_id: int) -> None:
