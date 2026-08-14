@@ -18,7 +18,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import agent, config
+from . import agent, config, transcribe
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -104,6 +104,46 @@ async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(pedaco)
 
 
+async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    if not _autorizado(chat_id):
+        await _negar(update, chat_id)
+        return
+
+    if not config.AUDIO_ENABLED:
+        await update.message.reply_text(
+            "Áudio ainda não está configurado (falta a chave da OpenAI)."
+        )
+        return
+
+    voz = update.message.voice or update.message.audio
+    arquivo = await voz.get_file()
+    dados = bytes(await arquivo.download_as_bytearray())
+
+    await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    try:
+        texto = await asyncio.to_thread(transcribe.transcribe, dados)
+    except Exception as e:  # noqa: BLE001
+        log.exception("Erro ao transcrever")
+        await update.message.reply_text(f"Não consegui transcrever o áudio: {e}")
+        return
+
+    if not texto:
+        await update.message.reply_text("Não entendi o áudio. Pode repetir?")
+        return
+
+    # Mostra o que entendeu e depois processa como se fosse texto
+    await update.message.reply_text(f"🎤 Entendi: {texto}")
+    try:
+        resposta = await asyncio.to_thread(agent.handle_message, chat_id, texto)
+    except Exception as e:  # noqa: BLE001
+        log.exception("Erro ao processar áudio transcrito")
+        resposta = f"Deu erro: {e}"
+
+    for pedaco in _quebrar(resposta, 4000):
+        await update.message.reply_text(pedaco)
+
+
 async def _negar(update: Update, chat_id: int) -> None:
     log.warning("Chat não autorizado: %s", chat_id)
     await update.message.reply_text(
@@ -130,6 +170,7 @@ def main() -> None:
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
 
     log.info("Assistente no ar (modelo=%s). Ctrl+C para parar.", config.MODEL)
     app.run_polling(allowed_updates=Update.ALL_TYPES)

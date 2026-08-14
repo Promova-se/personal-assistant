@@ -58,6 +58,10 @@ GCAL_ENABLED = os.path.exists(GCAL_KEYFILE)
 # fora do Git.
 DIET_DB = os.getenv("DIET_DB", str(ROOT / "data" / "meals.db")).strip()
 
+# Transcrição de áudio (OpenAI Whisper). Só habilita se a chave existir.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+AUDIO_ENABLED = bool(OPENAI_API_KEY)
+
 
 def missing() -> list[str]:
     """Retorna a lista de segredos obrigatórios que ainda faltam."""
