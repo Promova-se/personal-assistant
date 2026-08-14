@@ -132,8 +132,7 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Não entendi o áudio. Pode repetir?")
         return
 
-    # Mostra o que entendeu e depois processa como se fosse texto
-    await update.message.reply_text(f"🎤 Entendi: {texto}")
+    # Processa direto como se fosse texto (sem devolver a transcrição)
     try:
         resposta = await asyncio.to_thread(agent.handle_message, chat_id, texto)
     except Exception as e:  # noqa: BLE001
