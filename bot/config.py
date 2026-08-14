@@ -61,6 +61,12 @@ DIET_DB = os.getenv("DIET_DB", str(ROOT / "data" / "meals.db")).strip()
 # Memória/perfil do usuário: arquivo que o bot lê sempre e vai preenchendo.
 MEMORY_FILE = os.getenv("MEMORY_FILE", str(ROOT / "data" / "perfil.md")).strip()
 
+# Rastreadores (financeiro, exercícios) — mesma mecânica da dieta.
+TRACKER_DB = os.getenv("TRACKER_DB", str(ROOT / "data" / "tracker.db")).strip()
+
+# Base de conhecimento: pasta de arquivos .md que o bot consulta e pode ampliar.
+KNOWLEDGE_DIR = os.getenv("KNOWLEDGE_DIR", str(ROOT / "data" / "knowledge")).strip()
+
 # Transcrição de áudio (OpenAI Whisper). Só habilita se a chave existir.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 AUDIO_ENABLED = bool(OPENAI_API_KEY)

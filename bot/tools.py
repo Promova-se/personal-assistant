@@ -222,6 +222,18 @@ from . import memory  # noqa: E402
 TOOLS = TOOLS + memory.TOOLS
 _DISPATCH.update(memory.DISPATCH)
 
+# Rastreadores: financeiro e exercícios (mesma mecânica da dieta)
+from . import tracker  # noqa: E402
+
+TOOLS = TOOLS + tracker.TOOLS
+_DISPATCH.update(tracker.DISPATCH)
+
+# Base de conhecimento (cupido e o que mais o Állan ensinar)
+from . import knowledge  # noqa: E402
+
+TOOLS = TOOLS + knowledge.TOOLS
+_DISPATCH.update(knowledge.DISPATCH)
+
 
 def run_tool(name: str, args: dict) -> str:
     """Executa a ferramenta e devolve o resultado como texto."""
