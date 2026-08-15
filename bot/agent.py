@@ -7,6 +7,8 @@ resultado -> Claude responde em texto.
 from __future__ import annotations
 
 import base64
+import json
+import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -19,8 +21,47 @@ _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 # Histórico por chat_id -> lista de mensagens (formato da API)
 _history: dict[int, list[dict]] = {}
 
-MAX_TURNS = 12  # mantém as últimas ~6 trocas para não crescer sem limite
+MAX_TURNS = 12  # mantém as últimas ~6 trocas na RAM para não crescer sem limite
 MAX_TOOL_LOOPS = 8
+
+# Persistência do fio da conversa em disco (só o texto das trocas), para o bot
+# continuar lembrando do assunto mesmo após reiniciar.
+_SESS_DIR = os.path.join(os.path.dirname(config.MEMORY_FILE), "sessions")
+MAX_DISK = 24  # últimas ~12 trocas guardadas em disco
+
+
+def _disk_path(chat_id: int) -> str:
+    return os.path.join(_SESS_DIR, f"{chat_id}.json")
+
+
+def _load_disk(chat_id: int) -> list[dict]:
+    try:
+        with open(_disk_path(chat_id), encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _save_turn(chat_id: int, user_text: str, assistant_text: str) -> None:
+    try:
+        os.makedirs(_SESS_DIR, exist_ok=True)
+        hist = _load_disk(chat_id)
+        hist.append({"role": "user", "content": user_text})
+        hist.append({"role": "assistant", "content": assistant_text})
+        hist = hist[-MAX_DISK:]
+        with open(_disk_path(chat_id), "w", encoding="utf-8") as f:
+            json.dump(hist, f, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _get_history(chat_id: int) -> list[dict]:
+    """Pega o histórico da RAM; se vazio (ex: após reinício), carrega do disco."""
+    msgs = _history.get(chat_id)
+    if msgs is None:
+        msgs = _load_disk(chat_id)
+        _history[chat_id] = msgs
+    return msgs
 
 
 def _system_prompt() -> list[dict]:
@@ -99,6 +140,10 @@ def _system_prompt() -> list[dict]:
 
 def reset(chat_id: int) -> None:
     _history.pop(chat_id, None)
+    try:
+        os.remove(_disk_path(chat_id))
+    except FileNotFoundError:
+        pass
 
 
 def handle_message(
@@ -108,7 +153,7 @@ def handle_message(
     media_type: str = "image/jpeg",
 ) -> str:
     """Processa uma mensagem do usuário (texto e/ou imagem) e devolve a resposta."""
-    msgs = _history.setdefault(chat_id, [])
+    msgs = _get_history(chat_id)
 
     img_idx = -1
     if image_bytes:
@@ -144,6 +189,7 @@ def handle_message(
     if img_idx >= 0:
         msgs[img_idx] = {"role": "user", "content": "[Enviei uma foto para você analisar.]"}
 
+    _save_turn(chat_id, text or "[foto]", resposta)
     _trim(chat_id)
     return resposta
 
@@ -187,7 +233,7 @@ def handle_document(
 ) -> str:
     """Lê um documento anexado (ex: export de conversa), resume e aprende — sem
     guardar o texto gigante no histórico."""
-    msgs = _history.setdefault(chat_id, [])
+    msgs = _get_history(chat_id)
     MAX_CHARS = 400_000
     truncado = len(content) > MAX_CHARS
     if truncado:
@@ -210,6 +256,7 @@ def handle_document(
         {"role": "user", "content": f"[Enviei o documento '{filename}' e pedi um resumo/análise.]"}
     )
     msgs.append({"role": "assistant", "content": resposta})
+    _save_turn(chat_id, f"[documento: {filename}]", resposta)
     _trim(chat_id)
     return resposta
 
