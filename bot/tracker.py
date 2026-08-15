@@ -84,7 +84,7 @@ def summary(
     ini, fim, rotulo = _range(period, start_date, end_date)
     con = _conn()
     rows = con.execute(
-        "SELECT day, description, value, unit, tag, ts FROM entries "
+        "SELECT day, description, value, unit, tag, ts, id FROM entries "
         "WHERE kind=? AND day>=? AND day<=? ORDER BY ts",
         (kind, ini, fim),
     ).fetchall()
@@ -109,8 +109,59 @@ def summary(
     for r in rows:
         val = f" — {r[2]:g} {r[3] or ''}".rstrip() if r[2] is not None else ""
         etq = f" [{r[4]}]" if r[4] else ""
-        linhas.append(f"  • {r[0]} {r[1]}{val}{etq}")
+        linhas.append(f"  • #{r[6]} {r[0]} {r[1]}{val}{etq}")
     return "\n".join(linhas)
+
+
+def delete_entry(entry_id: int) -> str:
+    con = _conn()
+    with con:
+        cur = con.execute("DELETE FROM entries WHERE id=?", (entry_id,))
+    con.close()
+    return (
+        f"Lançamento #{entry_id} removido."
+        if cur.rowcount
+        else f"Não achei o lançamento #{entry_id}."
+    )
+
+
+def edit_entry(
+    entry_id: int,
+    description: str | None = None,
+    value: float | None = None,
+    tag: str | None = None,
+    when_iso: str = "",
+) -> str:
+    campos, vals = [], []
+    if description is not None:
+        campos.append("description=?")
+        vals.append(description)
+    if value is not None:
+        campos.append("value=?")
+        vals.append(value)
+    if tag is not None:
+        campos.append("tag=?")
+        vals.append(tag)
+    if when_iso:
+        dt = datetime.fromisoformat(when_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_TZ)
+        campos.append("ts=?")
+        vals.append(dt.isoformat())
+        campos.append("day=?")
+        vals.append(dt.strftime("%Y-%m-%d"))
+    if not campos:
+        return "Nada para editar."
+    vals.append(entry_id)
+    con = _conn()
+    with con:
+        cur = con.execute(f"UPDATE entries SET {', '.join(campos)} WHERE id=?", vals)
+    con.close()
+    return (
+        f"Lançamento #{entry_id} atualizado."
+        if cur.rowcount
+        else f"Não achei o lançamento #{entry_id}."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +227,36 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "entry_delete",
+        "description": (
+            "Apaga um lançamento de financeiro OU exercício pelo id (veja o #id no "
+            "fin_summary/ex_summary)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"entry_id": {"type": "integer"}},
+            "required": ["entry_id"],
+        },
+    },
+    {
+        "name": "entry_edit",
+        "description": (
+            "Corrige um lançamento de financeiro OU exercício pelo id. Campos: description, "
+            "value (R$ no financeiro / minutos no exercício), tag (categoria/tipo), when_iso."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entry_id": {"type": "integer"},
+                "description": {"type": "string"},
+                "value": {"type": "number"},
+                "tag": {"type": "string"},
+                "when_iso": {"type": "string"},
+            },
+            "required": ["entry_id"],
+        },
+    },
 ]
 
 DISPATCH = {
@@ -190,5 +271,13 @@ DISPATCH = {
     ),
     "ex_summary": lambda a: summary(
         "exercicio", a.get("period", "week"), a.get("start_date", ""), a.get("end_date", "")
+    ),
+    "entry_delete": lambda a: delete_entry(a["entry_id"]),
+    "entry_edit": lambda a: edit_entry(
+        a["entry_id"],
+        a.get("description"),
+        a.get("value"),
+        a.get("tag"),
+        a.get("when_iso", ""),
     ),
 }

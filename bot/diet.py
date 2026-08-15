@@ -92,7 +92,7 @@ def summary(period: str = "day", start_date: str = "", end_date: str = "") -> st
     ini, fim, rotulo = _range(period, start_date, end_date)
     con = _conn()
     rows = con.execute(
-        "SELECT day, description, calories, protein, carbs, fat, ts "
+        "SELECT day, description, calories, protein, carbs, fat, ts, id "
         "FROM meals WHERE day >= ? AND day <= ? ORDER BY ts",
         (ini, fim),
     ).fetchall()
@@ -118,7 +118,7 @@ def summary(period: str = "day", start_date: str = "", end_date: str = "") -> st
         for i in itens:
             hora = i[6][11:16] if len(i[6]) >= 16 else ""
             cal = f"{i[2]} kcal" if i[2] is not None else "?"
-            linhas.append(f"  • {hora} {i[1]} — {cal}")
+            linhas.append(f"  • #{i[7]} {hora} {i[1]} — {cal}")
 
     n_dias = len(por_dia)
     media = round(total_cal / n_dias) if n_dias else 0
@@ -128,6 +128,51 @@ def summary(period: str = "day", start_date: str = "", end_date: str = "") -> st
     if n_dias > 1:
         linhas.append(f"Média/dia: {media} kcal ({n_dias} dias)")
     return "\n".join(linhas)
+
+
+def delete_meal(meal_id: int) -> str:
+    con = _conn()
+    with con:
+        cur = con.execute("DELETE FROM meals WHERE id=?", (meal_id,))
+    con.close()
+    return (
+        f"Refeição #{meal_id} removida."
+        if cur.rowcount
+        else f"Não achei a refeição #{meal_id}."
+    )
+
+
+def edit_meal(
+    meal_id: int,
+    description: str | None = None,
+    calories: int | None = None,
+    protein: float | None = None,
+    carbs: float | None = None,
+    fat: float | None = None,
+) -> str:
+    campos, vals = [], []
+    for nome, v in [
+        ("description", description),
+        ("calories", calories),
+        ("protein", protein),
+        ("carbs", carbs),
+        ("fat", fat),
+    ]:
+        if v is not None:
+            campos.append(f"{nome}=?")
+            vals.append(v)
+    if not campos:
+        return "Nada para editar."
+    vals.append(meal_id)
+    con = _conn()
+    with con:
+        cur = con.execute(f"UPDATE meals SET {', '.join(campos)} WHERE id=?", vals)
+    con.close()
+    return (
+        f"Refeição #{meal_id} atualizada."
+        if cur.rowcount
+        else f"Não achei a refeição #{meal_id}."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +216,34 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "diet_delete",
+        "description": "Apaga uma refeição pelo id (veja o id no diet_summary, ex: #12).",
+        "input_schema": {
+            "type": "object",
+            "properties": {"meal_id": {"type": "integer"}},
+            "required": ["meal_id"],
+        },
+    },
+    {
+        "name": "diet_edit",
+        "description": (
+            "Corrige uma refeição pelo id. Informe só os campos a mudar: description, "
+            "calories, protein, carbs, fat."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "meal_id": {"type": "integer"},
+                "description": {"type": "string"},
+                "calories": {"type": "integer"},
+                "protein": {"type": "number"},
+                "carbs": {"type": "number"},
+                "fat": {"type": "number"},
+            },
+            "required": ["meal_id"],
+        },
+    },
 ]
 
 DISPATCH = {
@@ -184,5 +257,14 @@ DISPATCH = {
     ),
     "diet_summary": lambda a: summary(
         a.get("period", "day"), a.get("start_date", ""), a.get("end_date", "")
+    ),
+    "diet_delete": lambda a: delete_meal(a["meal_id"]),
+    "diet_edit": lambda a: edit_meal(
+        a["meal_id"],
+        a.get("description"),
+        a.get("calories"),
+        a.get("protein"),
+        a.get("carbs"),
+        a.get("fat"),
     ),
 }

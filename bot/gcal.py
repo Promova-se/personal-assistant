@@ -118,6 +118,38 @@ def create_event(
     return f"Evento criado: {_fmt(ev)}\n{ev.get('htmlLink', '')}"
 
 
+def update_event(
+    event_id: str,
+    summary: str = "",
+    start_iso: str = "",
+    end_iso: str = "",
+    description: str = "",
+    location: str = "",
+    calendar: str = "",
+) -> str:
+    """Edita um evento existente. Informe só os campos a mudar."""
+    body: dict = {}
+    if summary:
+        body["summary"] = summary
+    if start_iso:
+        body["start"] = {"dateTime": start_iso, "timeZone": config.TIMEZONE}
+    if end_iso:
+        body["end"] = {"dateTime": end_iso, "timeZone": config.TIMEZONE}
+    if description:
+        body["description"] = description
+    if location:
+        body["location"] = location
+    if not body:
+        return "Nada para atualizar."
+    ev = (
+        _svc()
+        .events()
+        .patch(calendarId=_cal(calendar), eventId=event_id, body=body)
+        .execute()
+    )
+    return f"Evento atualizado: {_fmt(ev)}"
+
+
 def delete_event(event_id: str, calendar: str = "") -> str:
     _svc().events().delete(calendarId=_cal(calendar), eventId=event_id).execute()
     return f"Evento {event_id} removido."
@@ -174,6 +206,26 @@ TOOLS = [
         },
     },
     {
+        "name": "gcal_update_event",
+        "description": (
+            "Edita um evento existente pelo id (veja o id no gcal_list_events). Informe "
+            "só os campos a mudar: summary, start_iso, end_iso, description, location."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string"},
+                "summary": {"type": "string"},
+                "start_iso": {"type": "string"},
+                "end_iso": {"type": "string"},
+                "description": {"type": "string"},
+                "location": {"type": "string"},
+                "calendar": {"type": "string", "description": _CAL_DESC},
+            },
+            "required": ["event_id"],
+        },
+    },
+    {
         "name": "gcal_delete_event",
         "description": "Remove um evento da Google Agenda pelo seu id.",
         "input_schema": {
@@ -195,6 +247,15 @@ DISPATCH = {
     "gcal_create_event": lambda a: create_event(
         a["summary"],
         a["start_iso"],
+        a.get("end_iso", ""),
+        a.get("description", ""),
+        a.get("location", ""),
+        a.get("calendar", ""),
+    ),
+    "gcal_update_event": lambda a: update_event(
+        a["event_id"],
+        a.get("summary", ""),
+        a.get("start_iso", ""),
         a.get("end_iso", ""),
         a.get("description", ""),
         a.get("location", ""),
