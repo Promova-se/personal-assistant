@@ -18,7 +18,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import agent, config, transcribe
+from . import agent, config, costs, transcribe
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -131,6 +131,9 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not texto:
         await update.message.reply_text("Não entendi o áudio. Pode repetir?")
         return
+
+    # contabiliza o custo do áudio (OpenAI) pela duração
+    costs.record_openai_whisper(getattr(voz, "duration", 0) or 0)
 
     # Processa direto como se fosse texto (sem devolver a transcrição)
     try:

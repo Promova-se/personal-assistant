@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import anthropic
 
-from . import config, memory, tools
+from . import config, costs, memory, tools
 
 _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
@@ -66,6 +66,8 @@ def _system_prompt() -> list[dict]:
         "quando precisar de informação atual (notícias, preços, cotações, horários, clima, "
         "pesquisa) ou pra resumir um link que ele mandar. Pesquise só quando agregar valor e "
         "cite a fonte de forma curta. Não use pra coisas que você já sabe.\n\n"
+        "CUSTOS: se ele perguntar quanto gastou nas APIs, use cost_summary (por API: "
+        "Anthropic e OpenAI). Lembre que é estimativa por uso.\n\n"
         "BASE DE CONHECIMENTO (knowledge_*): você tem assuntos que pode dominar. Quando o "
         "tema tiver material salvo (ex: conselhos amorosos → 'cupido'), consulte "
         "knowledge_read antes de responder. O Állan pode te ENSINAR coisas novas a qualquer "
@@ -157,6 +159,7 @@ def _run(msgs: list[dict]) -> str:
             output_config={"effort": "low"},
             messages=msgs,
         )
+        costs.record_anthropic(resp.usage, config.MODEL)
         msgs.append({"role": "assistant", "content": resp.content})
 
         if resp.stop_reason == "tool_use":

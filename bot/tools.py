@@ -234,6 +234,12 @@ from . import knowledge  # noqa: E402
 TOOLS = TOOLS + knowledge.TOOLS
 _DISPATCH.update(knowledge.DISPATCH)
 
+# Custos das APIs (Anthropic / OpenAI)
+from . import costs  # noqa: E402
+
+TOOLS = TOOLS + costs.TOOLS
+_DISPATCH.update(costs.DISPATCH)
+
 # Acesso à internet (ferramentas do lado do servidor da Anthropic — sem dispatch:
 # a busca/leitura roda no servidor deles e volta já pronta).
 TOOLS = TOOLS + [
