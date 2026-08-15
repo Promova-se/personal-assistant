@@ -19,16 +19,14 @@ _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 # Histórico por chat_id -> lista de mensagens (formato da API)
 _history: dict[int, list[dict]] = {}
 
-MAX_TURNS = 24  # mantém as últimas ~12 trocas para não crescer sem limite
+MAX_TURNS = 12  # mantém as últimas ~6 trocas para não crescer sem limite
 MAX_TOOL_LOOPS = 8
 
 
-def _system_prompt() -> str:
-    agora = datetime.now(ZoneInfo(config.TIMEZONE))
+def _system_prompt() -> list[dict]:
     base = (
         "Você é o assistente pessoal do Állan, falando por Telegram em português "
-        "do Brasil. Seja direto, prático e cordial — respostas curtas, sem enrolação.\n"
-        f"Agora: {agora.strftime('%A, %d/%m/%Y %H:%M')} ({config.TIMEZONE}).\n\n"
+        "do Brasil. Seja direto, prático e cordial — respostas curtas, sem enrolação.\n\n"
         "Você tem ferramentas para ler e editar o Trello do Állan (quadros, listas, "
         "cards, prazos). Use-as quando ele pedir para ver, criar, mover ou concluir "
         "tarefas. Antes de criar um card, descubra o list_id certo com as ferramentas "
@@ -79,10 +77,17 @@ def _system_prompt() -> str:
         "fez. Datas de prazo no Trello costumam ser gravadas às 02:59Z (fim do dia no "
         "horário de Brasília) — respeite esse padrão ao criar prazos 'para hoje/amanhã'."
     )
+    # Bloco estável (cacheado) + bloco volátil (hora + memória, não cacheado).
+    # Isso reduz muito o custo: o "manual" repetido é reaproveitado a ~10%.
+    agora = datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%A, %d/%m/%Y %H:%M")
+    volatil = f"Agora: {agora} ({config.TIMEZONE})."
     perfil = memory.load()
     if perfil:
-        base += "\n\n## O que você já sabe sobre o Állan (memória)\n" + perfil
-    return base
+        volatil += "\n\n## O que você já sabe sobre o Állan (memória)\n" + perfil
+    return [
+        {"type": "text", "text": base, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": volatil},
+    ]
 
 
 def reset(chat_id: int) -> None:
@@ -98,12 +103,14 @@ def handle_message(
     """Processa uma mensagem do usuário (texto e/ou imagem) e devolve a resposta."""
     msgs = _history.setdefault(chat_id, [])
 
+    img_idx = -1
     if image_bytes:
         b64 = base64.standard_b64encode(image_bytes).decode()
         legenda = text or (
-            "Extraia o evento desta imagem e adicione à minha Google Agenda. "
-            "Se faltar data ou hora, me pergunte."
+            "Analise esta imagem. Se for comida, registre a refeição; se for um "
+            "evento/convite, crie na agenda. Se faltar dado, me pergunte."
         )
+        img_idx = len(msgs)
         msgs.append(
             {
                 "role": "user",
@@ -124,6 +131,12 @@ def handle_message(
         msgs.append({"role": "user", "content": text})
 
     resposta = _run(msgs)
+
+    # Depois de processada, troca a imagem (pesada) por uma nota curta no
+    # histórico — evita reenviar a foto nas próximas mensagens.
+    if img_idx >= 0:
+        msgs[img_idx] = {"role": "user", "content": "[Enviei uma foto para você analisar.]"}
+
     _trim(chat_id)
     return resposta
 
