@@ -229,9 +229,14 @@ async def _reminders_loop(app: Application) -> None:
                 except Exception:  # noqa: BLE001
                     log.exception("Falha ao enviar lembrete #%s", rid)
                 await asyncio.to_thread(reminders.complete, rid)
+        except asyncio.CancelledError:
+            break  # encerramento normal (deploy/restart) — sai sem barulho
         except Exception:  # noqa: BLE001
             log.exception("Erro no laço de lembretes")
-        await asyncio.sleep(20)
+        try:
+            await asyncio.sleep(20)
+        except asyncio.CancelledError:
+            break
 
 
 async def _post_init(app: Application) -> None:
