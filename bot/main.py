@@ -210,6 +210,18 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(pedaco)
 
 
+async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Registra qualquer erro não tratado e avisa o usuário (sem travar o bot)."""
+    log.exception("Erro não tratado no handler", exc_info=ctx.error)
+    try:
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(
+                "Tive um problema ao processar isso. Pode tentar de novo?"
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _negar(update: Update, chat_id: int) -> None:
     log.warning("Chat não autorizado: %s", chat_id)
     await update.message.reply_text(
@@ -231,13 +243,19 @@ def main() -> None:
             "Faltam segredos no .env / .trello.env: " + ", ".join(faltando)
         )
 
-    app = Application.builder().token(config.TELEGRAM_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(config.TELEGRAM_TOKEN)
+        .concurrent_updates(4)  # uma mensagem travada não bloqueia as outras
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
+    app.add_error_handler(on_error)
 
     log.info("Assistente no ar (modelo=%s). Ctrl+C para parar.", config.MODEL)
     app.run_polling(allowed_updates=Update.ALL_TYPES)

@@ -16,7 +16,10 @@ import anthropic
 
 from . import config, costs, memory, tools
 
-_client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+# timeout por chamada e poucas retentativas: evita que uma chamada fique presa
+_client = anthropic.Anthropic(
+    api_key=config.ANTHROPIC_API_KEY, timeout=120.0, max_retries=1
+)
 
 # Histórico por chat_id -> lista de mensagens (formato da API)
 _history: dict[int, list[dict]] = {}
