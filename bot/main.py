@@ -219,7 +219,7 @@ async def _reminders_loop(app: Application) -> None:
                     await app.bot.send_message(chat_id=chat_id, text=f"⏰ {message}")
                 except Exception:  # noqa: BLE001
                     log.exception("Falha ao enviar lembrete #%s", rid)
-                await asyncio.to_thread(reminders.mark_sent, rid)
+                await asyncio.to_thread(reminders.complete, rid)
         except Exception:  # noqa: BLE001
             log.exception("Erro no laço de lembretes")
         await asyncio.sleep(20)
