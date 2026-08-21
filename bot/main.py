@@ -18,7 +18,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import agent, config, costs, transcribe
+from . import agent, config, costs, reminders, transcribe
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -210,6 +210,25 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(pedaco)
 
 
+async def _reminders_loop(app: Application) -> None:
+    """Roda em segundo plano: a cada ~20s, manda os lembretes que venceram."""
+    while True:
+        try:
+            for rid, chat_id, message in await asyncio.to_thread(reminders.due_now):
+                try:
+                    await app.bot.send_message(chat_id=chat_id, text=f"⏰ {message}")
+                except Exception:  # noqa: BLE001
+                    log.exception("Falha ao enviar lembrete #%s", rid)
+                await asyncio.to_thread(reminders.mark_sent, rid)
+        except Exception:  # noqa: BLE001
+            log.exception("Erro no laço de lembretes")
+        await asyncio.sleep(20)
+
+
+async def _post_init(app: Application) -> None:
+    app.create_task(_reminders_loop(app), update=None)
+
+
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Registra qualquer erro não tratado e avisa o usuário (sem travar o bot)."""
     log.exception("Erro não tratado no handler", exc_info=ctx.error)
@@ -247,6 +266,7 @@ def main() -> None:
         Application.builder()
         .token(config.TELEGRAM_TOKEN)
         .concurrent_updates(4)  # uma mensagem travada não bloqueia as outras
+        .post_init(_post_init)  # inicia o laço de lembretes em segundo plano
         .build()
     )
     app.add_handler(CommandHandler("start", start))

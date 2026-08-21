@@ -112,6 +112,14 @@ def _system_prompt() -> list[dict]:
         "cite a fonte de forma curta. Não use pra coisas que você já sabe.\n\n"
         "CUSTOS: se ele perguntar quanto gastou nas APIs, use cost_summary (por API: "
         "Anthropic e OpenAI). Lembre que é estimativa por uso.\n\n"
+        "LEMBRETES/MENSAGENS PROGRAMADAS (reminder_*): quando ele pedir para você mandar "
+        "uma mensagem depois ('me lembra de X às 15h', 'daqui a 30 min me avisa Y'), use "
+        "reminder_create com when_iso calculado a partir do horário atual. Você mesmo vai "
+        "mandar essa mensagem sozinho, sem o Állan perguntar nada. reminder_list mostra os "
+        "pendentes; reminder_cancel cancela pelo id. Ainda NÃO há recorrência (não dá pra "
+        "agendar 'todo dia'); se ele pedir isso, avise e ofereça criar um lembrete único por "
+        "vez. Ligações de voz/vídeo pelo Telegram NÃO são possíveis (limitação da "
+        "plataforma para bots) — se ele pedir, explique isso.\n\n"
         "BASE DE CONHECIMENTO (knowledge_*): você tem assuntos que pode dominar. Quando o "
         "tema tiver material salvo (ex: conselhos amorosos → 'cupido'), consulte "
         "knowledge_read antes de responder. O Állan pode te ENSINAR coisas novas a qualquer "
@@ -185,7 +193,7 @@ def handle_message(
     else:
         msgs.append({"role": "user", "content": text})
 
-    resposta = _run(msgs)
+    resposta = _run(msgs, chat_id)
 
     # Depois de processada, troca a imagem (pesada) por uma nota curta no
     # histórico — evita reenviar a foto nas próximas mensagens.
@@ -197,7 +205,7 @@ def handle_message(
     return resposta
 
 
-def _run(msgs: list[dict]) -> str:
+def _run(msgs: list[dict], chat_id: int) -> str:
     """Executa o laço de ferramentas sobre a lista de mensagens dada."""
     for _ in range(MAX_TOOL_LOOPS):
         resp = _client.messages.create(
@@ -215,7 +223,7 @@ def _run(msgs: list[dict]) -> str:
             resultados = []
             for bloco in resp.content:
                 if bloco.type == "tool_use":
-                    saida = tools.run_tool(bloco.name, bloco.input or {})
+                    saida = tools.run_tool(bloco.name, bloco.input or {}, chat_id)
                     resultados.append(
                         {"type": "tool_result", "tool_use_id": bloco.id, "content": saida}
                     )
@@ -252,7 +260,7 @@ def handle_document(
 
     # Roda numa cópia do histórico para NÃO persistir o texto gigante
     work = msgs + [{"role": "user", "content": prompt}]
-    resposta = _run(work)
+    resposta = _run(work, chat_id)
 
     # No histórico real, guarda só um registro compacto + a resposta
     msgs.append(

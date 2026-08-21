@@ -240,6 +240,12 @@ from . import costs  # noqa: E402
 TOOLS = TOOLS + costs.TOOLS
 _DISPATCH.update(costs.DISPATCH)
 
+# Lembretes / mensagens programadas
+from . import reminders  # noqa: E402
+
+TOOLS = TOOLS + reminders.TOOLS
+_DISPATCH.update(reminders.DISPATCH)
+
 # Acesso à internet (ferramentas do lado do servidor da Anthropic — sem dispatch:
 # a busca/leitura roda no servidor deles e volta já pronta).
 TOOLS = TOOLS + [
@@ -248,11 +254,13 @@ TOOLS = TOOLS + [
 ]
 
 
-def run_tool(name: str, args: dict) -> str:
+def run_tool(name: str, args: dict, chat_id: int | None = None) -> str:
     """Executa a ferramenta e devolve o resultado como texto."""
     fn = _DISPATCH.get(name)
     if fn is None:
         return f"Ferramenta desconhecida: {name}"
+    if chat_id is not None:
+        args = {**args, "_chat_id": chat_id}
     try:
         return str(fn(args))
     except requests.HTTPError as e:
