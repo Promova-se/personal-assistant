@@ -121,6 +121,12 @@ def _system_prompt() -> list[dict]:
         "reminder_list mostra os pendentes; reminder_cancel cancela pelo id. Ligações de "
         "voz/vídeo pelo Telegram NÃO são possíveis (limitação da plataforma para bots) — se "
         "ele pedir, explique isso.\n\n"
+        "RESPOSTA EM ÁUDIO: se o Állan pedir para você responder em áudio nesta mensagem "
+        "(ex: 'manda em áudio', 'fala isso pra mim', 'responde por voz'), OU se isso estiver "
+        "salvo como preferência permanente na memória dele, comece sua resposta final com a "
+        "marca literal [AUDIO] bem no início (sem espaço antes), seguida do texto que você "
+        "quer que seja falado — escreva como fala, sem markdown/emojis em excesso. Se ele "
+        "disser para voltar a responder em texto, pare de usar a marca.\n\n"
         "BASE DE CONHECIMENTO (knowledge_*): você tem assuntos que pode dominar. Quando o "
         "tema tiver material salvo (ex: conselhos amorosos → 'cupido'), consulte "
         "knowledge_read antes de responder. O Állan pode te ENSINAR coisas novas a qualquer "
@@ -158,13 +164,24 @@ def reset(chat_id: int) -> None:
         pass
 
 
+_AUDIO_MARK = "[AUDIO]"
+
+
+def _split_audio_marker(raw: str) -> tuple[str, bool]:
+    """Detecta a marca [AUDIO] no início da resposta do Claude e a remove."""
+    if raw.startswith(_AUDIO_MARK):
+        return raw[len(_AUDIO_MARK):].strip(), True
+    return raw, False
+
+
 def handle_message(
     chat_id: int,
     text: str,
     image_bytes: bytes | None = None,
     media_type: str = "image/jpeg",
-) -> str:
-    """Processa uma mensagem do usuário (texto e/ou imagem) e devolve a resposta."""
+) -> tuple[str, bool]:
+    """Processa uma mensagem do usuário (texto e/ou imagem). Devolve (resposta,
+    quer_audio) — quer_audio indica se deve ser enviada como voz."""
     msgs = _get_history(chat_id)
 
     img_idx = -1
@@ -194,7 +211,8 @@ def handle_message(
     else:
         msgs.append({"role": "user", "content": text})
 
-    resposta = _run(msgs, chat_id)
+    raw = _run(msgs, chat_id)
+    resposta, quer_audio = _split_audio_marker(raw)
 
     # Depois de processada, troca a imagem (pesada) por uma nota curta no
     # histórico — evita reenviar a foto nas próximas mensagens.
@@ -203,7 +221,7 @@ def handle_message(
 
     _save_turn(chat_id, text or "[foto]", resposta)
     _trim(chat_id)
-    return resposta
+    return resposta, quer_audio
 
 
 def _run(msgs: list[dict], chat_id: int) -> str:
@@ -242,7 +260,7 @@ def _run(msgs: list[dict], chat_id: int) -> str:
 
 def handle_document(
     chat_id: int, filename: str, content: str, instruction: str = ""
-) -> str:
+) -> tuple[str, bool]:
     """Lê um documento anexado (ex: export de conversa), resume e aprende — sem
     guardar o texto gigante no histórico."""
     msgs = _get_history(chat_id)
@@ -261,7 +279,8 @@ def handle_document(
 
     # Roda numa cópia do histórico para NÃO persistir o texto gigante
     work = msgs + [{"role": "user", "content": prompt}]
-    resposta = _run(work, chat_id)
+    raw = _run(work, chat_id)
+    resposta, quer_audio = _split_audio_marker(raw)
 
     # No histórico real, guarda só um registro compacto + a resposta
     msgs.append(
@@ -270,7 +289,7 @@ def handle_document(
     msgs.append({"role": "assistant", "content": resposta})
     _save_turn(chat_id, f"[documento: {filename}]", resposta)
     _trim(chat_id)
-    return resposta
+    return resposta, quer_audio
 
 
 def _trim(chat_id: int) -> None:

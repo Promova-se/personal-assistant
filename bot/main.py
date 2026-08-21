@@ -18,13 +18,27 @@ from telegram.ext import (
     filters,
 )
 
-from . import agent, config, costs, reminders, transcribe
+from . import agent, config, costs, reminders, transcribe, tts
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     level=logging.INFO,
 )
 log = logging.getLogger("assistente")
+
+
+async def _responder(update: Update, resposta: str, quer_audio: bool = False) -> None:
+    """Manda a resposta como voz (se pedido e configurado) ou como texto."""
+    if quer_audio and config.AUDIO_ENABLED:
+        try:
+            audio = await asyncio.to_thread(tts.synthesize, resposta)
+            costs.record_openai_tts(len(resposta))
+            await update.message.reply_voice(voice=audio)
+            return
+        except Exception:  # noqa: BLE001
+            log.exception("Erro ao sintetizar áudio; caindo para texto")
+    for pedaco in _quebrar(resposta, 4000):
+        await update.message.reply_text(pedaco)
 
 
 def _autorizado(chat_id: int) -> bool:
@@ -69,14 +83,12 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         # agent.handle_message é bloqueante (SDK síncrono) -> roda em thread
-        resposta = await asyncio.to_thread(agent.handle_message, chat_id, texto)
+        resposta, quer_audio = await asyncio.to_thread(agent.handle_message, chat_id, texto)
     except Exception as e:  # noqa: BLE001
         log.exception("Erro ao processar mensagem")
-        resposta = f"Deu erro aqui: {e}"
+        resposta, quer_audio = f"Deu erro aqui: {e}", False
 
-    # Telegram limita mensagens a 4096 chars
-    for pedaco in _quebrar(resposta, 4000):
-        await update.message.reply_text(pedaco)
+    await _responder(update, resposta, quer_audio)
 
 
 async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -93,15 +105,14 @@ async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     try:
-        resposta = await asyncio.to_thread(
+        resposta, quer_audio = await asyncio.to_thread(
             agent.handle_message, chat_id, legenda, dados, "image/jpeg"
         )
     except Exception as e:  # noqa: BLE001
         log.exception("Erro ao processar imagem")
-        resposta = f"Deu erro ao ler a imagem: {e}"
+        resposta, quer_audio = f"Deu erro ao ler a imagem: {e}", False
 
-    for pedaco in _quebrar(resposta, 4000):
-        await update.message.reply_text(pedaco)
+    await _responder(update, resposta, quer_audio)
 
 
 async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -137,13 +148,12 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Processa direto como se fosse texto (sem devolver a transcrição)
     try:
-        resposta = await asyncio.to_thread(agent.handle_message, chat_id, texto)
+        resposta, quer_audio = await asyncio.to_thread(agent.handle_message, chat_id, texto)
     except Exception as e:  # noqa: BLE001
         log.exception("Erro ao processar áudio transcrito")
-        resposta = f"Deu erro: {e}"
+        resposta, quer_audio = f"Deu erro: {e}", False
 
-    for pedaco in _quebrar(resposta, 4000):
-        await update.message.reply_text(pedaco)
+    await _responder(update, resposta, quer_audio)
 
 
 def _extrair_texto(nome: str, dados: bytes) -> str | None:
@@ -199,15 +209,14 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     legenda = update.message.caption or ""
     try:
-        resposta = await asyncio.to_thread(
+        resposta, quer_audio = await asyncio.to_thread(
             agent.handle_document, chat_id, nome, texto, legenda
         )
     except Exception as e:  # noqa: BLE001
         log.exception("Erro ao processar documento")
-        resposta = f"Deu erro ao analisar o documento: {e}"
+        resposta, quer_audio = f"Deu erro ao analisar o documento: {e}", False
 
-    for pedaco in _quebrar(resposta, 4000):
-        await update.message.reply_text(pedaco)
+    await _responder(update, resposta, quer_audio)
 
 
 async def _reminders_loop(app: Application) -> None:

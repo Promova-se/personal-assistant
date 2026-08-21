@@ -27,6 +27,7 @@ _RATES = {
 _SONNET5_INTRO = (2.0, 10.0)  # promoção até 2026-08-31
 WHISPER_USD_PER_MIN = 0.006
 WEB_SEARCH_USD_EACH = 0.01
+TTS_USD_PER_CHAR = 15.0 / 1_000_000  # OpenAI tts-1
 
 
 def _db() -> sqlite3.Connection:
@@ -93,6 +94,13 @@ def record_anthropic(usage, model: str = "") -> None:
 def record_openai_whisper(seconds: float) -> None:
     try:
         _add("openai", (float(seconds) / 60.0) * WHISPER_USD_PER_MIN)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_openai_tts(chars: int) -> None:
+    try:
+        _add("openai", float(chars) * TTS_USD_PER_CHAR)
     except Exception:  # noqa: BLE001
         pass
 
