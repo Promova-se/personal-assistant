@@ -253,8 +253,27 @@ async def _reminders_loop(app: Application) -> None:
             break
 
 
+async def _cleanup_loop(app: Application) -> None:
+    """Roda em segundo plano: uma vez por dia, apaga arquivos/fotos com mais de
+    90 dias (disco + índice) para não acumular dado sensível indefinidamente."""
+    while True:
+        try:
+            n = await asyncio.to_thread(uploads.cleanup_old, 90)
+            if n:
+                log.info("Limpeza: %d arquivo(s) com mais de 90 dias removido(s)", n)
+        except asyncio.CancelledError:
+            break
+        except Exception:  # noqa: BLE001
+            log.exception("Erro na limpeza de arquivos antigos")
+        try:
+            await asyncio.sleep(24 * 3600)
+        except asyncio.CancelledError:
+            break
+
+
 async def _post_init(app: Application) -> None:
     app.create_task(_reminders_loop(app), update=None)
+    app.create_task(_cleanup_loop(app), update=None)
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:

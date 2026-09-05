@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from . import config
@@ -112,6 +112,25 @@ def view_file(file_id: int):
         ]
     texto = data.decode("utf-8", errors="replace")[:100_000]
     return [{"type": "text", "text": f"{nota}\n\n{texto}"}]
+
+
+def cleanup_old(days: int = 90) -> int:
+    """Remove do disco e do índice os arquivos mais antigos que 'days' dias.
+    Devolve quantos foram removidos."""
+    limite = (datetime.now(_TZ) - timedelta(days=days)).isoformat()
+    con = _conn()
+    rows = con.execute(
+        "SELECT id, path FROM files WHERE created_ts < ?", (limite,)
+    ).fetchall()
+    for _fid, path in rows:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+    with con:
+        con.execute("DELETE FROM files WHERE created_ts < ?", (limite,))
+    con.close()
+    return len(rows)
 
 
 # ---------------------------------------------------------------------------
