@@ -25,7 +25,7 @@ _client = anthropic.Anthropic(
 _history: dict[int, list[dict]] = {}
 
 MAX_TURNS = 12  # mantém as últimas ~6 trocas na RAM para não crescer sem limite
-MAX_TOOL_LOOPS = 8
+MAX_TOOL_LOOPS = 16  # análises com várias fotos/buscas podem precisar de mais rodadas
 
 # Persistência do fio da conversa em disco (só o texto das trocas), para o bot
 # continuar lembrando do assunto mesmo após reiniciar.
@@ -232,37 +232,52 @@ def handle_message(
 
 
 def _run(msgs: list[dict], chat_id: int) -> str:
-    """Executa o laço de ferramentas sobre a lista de mensagens dada."""
-    for _ in range(MAX_TOOL_LOOPS):
-        resp = _client.messages.create(
-            model=config.MODEL,
-            max_tokens=4096,
-            system=_system_prompt(),
-            tools=tools.TOOLS,
-            output_config={"effort": "low"},
-            messages=msgs,
-        )
-        costs.record_anthropic(resp.usage, config.MODEL)
-        msgs.append({"role": "assistant", "content": resp.content})
+    """Executa o laço de ferramentas sobre a lista de mensagens dada.
 
-        if resp.stop_reason == "tool_use":
-            resultados = []
-            for bloco in resp.content:
-                if bloco.type == "tool_use":
-                    saida = tools.run_tool(bloco.name, bloco.input or {}, chat_id)
-                    resultados.append(
-                        {"type": "tool_result", "tool_use_id": bloco.id, "content": saida}
-                    )
-            msgs.append({"role": "user", "content": resultados})
-            continue
+    Se algo der errado no meio (limite de passos ou exceção), desfaz tudo que
+    essa tentativa adicionou a `msgs` — senão um bloco de ferramenta do
+    servidor (ex: execução de código) pode ficar 'pendurado' sem resposta, e
+    toda mensagem seguinte passa a dar erro 400 (histórico corrompido).
+    """
+    checkpoint = len(msgs)
+    try:
+        for _ in range(MAX_TOOL_LOOPS):
+            resp = _client.messages.create(
+                model=config.MODEL,
+                max_tokens=4096,
+                system=_system_prompt(),
+                tools=tools.TOOLS,
+                output_config={"effort": "low"},
+                messages=msgs,
+            )
+            costs.record_anthropic(resp.usage, config.MODEL)
+            msgs.append({"role": "assistant", "content": resp.content})
 
-        # Ferramentas do servidor (busca web) podem pausar; reenvia pra continuar
-        if resp.stop_reason == "pause_turn":
-            continue
+            if resp.stop_reason == "tool_use":
+                resultados = []
+                for bloco in resp.content:
+                    if bloco.type == "tool_use":
+                        saida = tools.run_tool(bloco.name, bloco.input or {}, chat_id)
+                        resultados.append(
+                            {"type": "tool_result", "tool_use_id": bloco.id, "content": saida}
+                        )
+                msgs.append({"role": "user", "content": resultados})
+                continue
 
-        return "".join(b.text for b in resp.content if b.type == "text").strip() or "(sem resposta)"
+            # Ferramentas do servidor (busca web/execução de código) podem
+            # pausar; reenvia pra continuar de onde parou
+            if resp.stop_reason == "pause_turn":
+                continue
 
-    return "Precisei de muitos passos e parei por segurança. Pode reformular?"
+            return "".join(b.text for b in resp.content if b.type == "text").strip() or "(sem resposta)"
+
+        # Excedeu o limite de passos: pode haver um bloco de ferramenta do
+        # servidor sem resultado ainda — desfaz para não corromper o histórico
+        del msgs[checkpoint:]
+        return "Precisei de muitos passos e parei por segurança. Pode reformular?"
+    except Exception:
+        del msgs[checkpoint:]
+        raise
 
 
 def handle_document(
