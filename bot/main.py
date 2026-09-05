@@ -18,7 +18,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import agent, config, costs, reminders, transcribe, tts
+from . import agent, config, costs, reminders, transcribe, tts, uploads
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -102,6 +102,12 @@ async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     arquivo = await foto.get_file()
     dados = bytes(await arquivo.download_as_bytearray())
     legenda = update.message.caption or ""
+
+    # Salva pra poder ser revisitada depois (files_list/files_view)
+    try:
+        await asyncio.to_thread(uploads.save, chat_id, dados, "image/jpeg", legenda, "photo", "jpg")
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao salvar a foto para revisitar depois")
 
     await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     try:
@@ -208,6 +214,14 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     legenda = update.message.caption or ""
+
+    # Salva o TEXTO já extraído (não o zip cru) pra poder ser revisitado depois
+    try:
+        await asyncio.to_thread(
+            uploads.save, chat_id, texto.encode("utf-8"), "text/plain", legenda or nome, "document", "txt"
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao salvar o documento para revisitar depois")
     try:
         resposta, quer_audio = await asyncio.to_thread(
             agent.handle_document, chat_id, nome, texto, legenda

@@ -246,6 +246,12 @@ from . import reminders  # noqa: E402
 TOOLS = TOOLS + reminders.TOOLS
 _DISPATCH.update(reminders.DISPATCH)
 
+# Arquivos/fotos que o usuário já enviou (revisitáveis)
+from . import uploads  # noqa: E402
+
+TOOLS = TOOLS + uploads.TOOLS
+_DISPATCH.update(uploads.DISPATCH)
+
 # Acesso à internet (ferramentas do lado do servidor da Anthropic — sem dispatch:
 # a busca/leitura roda no servidor deles e volta já pronta).
 TOOLS = TOOLS + [
@@ -254,15 +260,18 @@ TOOLS = TOOLS + [
 ]
 
 
-def run_tool(name: str, args: dict, chat_id: int | None = None) -> str:
-    """Executa a ferramenta e devolve o resultado como texto."""
+def run_tool(name: str, args: dict, chat_id: int | None = None):
+    """Executa a ferramenta e devolve o resultado: texto normalmente, ou uma
+    lista de blocos de conteúdo (ex: imagem) quando a ferramenta reabre um
+    arquivo — nesse caso repassamos como veio, sem transformar em string."""
     fn = _DISPATCH.get(name)
     if fn is None:
         return f"Ferramenta desconhecida: {name}"
     if chat_id is not None:
         args = {**args, "_chat_id": chat_id}
     try:
-        return str(fn(args))
+        result = fn(args)
+        return result if isinstance(result, list) else str(result)
     except requests.HTTPError as e:
         return f"Erro na API do Trello ({e.response.status_code}): {e.response.text[:300]}"
     except Exception as e:  # noqa: BLE001
