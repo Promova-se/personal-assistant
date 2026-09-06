@@ -121,13 +121,13 @@ def _system_prompt() -> list[dict]:
         "reminder_list mostra os pendentes; reminder_cancel cancela pelo id. Ligações de "
         "voz/vídeo pelo Telegram NÃO são possíveis (limitação da plataforma para bots) — se "
         "ele pedir, explique isso.\n\n"
-        "ARQUIVOS ANTERIORES (files_list/files_view): toda foto e documento que o Állan "
+"ARQUIVOS ANTERIORES (files_list/files_view): toda foto, PDF e documento que o Állan "
         "manda fica salvo. Se ele pedir para você REVER algo enviado antes (ex: 'olha de "
-        "novo aquela foto da fatura', 'o documento de ontem'), use files_list para achar o "
-        "#id certo (por data/legenda/tipo) e depois files_view para reabrir — fotos voltam "
-        "como imagem de verdade, você analisa de novo como se tivesse acabado de receber. "
-        "Depois disso, aja normalmente com o que vir (ex: diet_log_meal, gcal_create_event, "
-        "fin_log).\n\n"
+        "novo aquela foto da fatura', 'o PDF de ontem'), use files_list para achar o #id "
+        "certo (por data/legenda/tipo) e depois files_view para reabrir — fotos e PDFs "
+        "voltam como arquivo de verdade, você analisa de novo como se tivesse acabado de "
+        "receber. Depois disso, aja normalmente com o que vir (ex: diet_log_meal, "
+        "gcal_create_event, fin_log).\n\n"
         "RESPOSTA EM ÁUDIO: se o Állan pedir para você responder em áudio nesta mensagem "
         "(ex: 'manda em áudio', 'fala isso pra mim', 'responde por voz'), OU se isso estiver "
         "salvo como preferência permanente na memória dele, comece sua resposta final com a "
@@ -310,6 +310,41 @@ def handle_document(
     )
     msgs.append({"role": "assistant", "content": resposta})
     _save_turn(chat_id, f"[documento: {filename}]", resposta)
+    _trim(chat_id)
+    return resposta, quer_audio
+
+
+def handle_pdf(
+    chat_id: int, filename: str, pdf_bytes: bytes, instruction: str = ""
+) -> tuple[str, bool]:
+    """Lê um PDF anexado usando a leitura nativa de PDF do Claude (funciona até
+    com PDF escaneado/imagem). Não guarda o base64 gigante no histórico real."""
+    msgs = _get_history(chat_id)
+    pedido = instruction.strip() or (
+        "Leia este PDF e resuma o que for relevante. Se for fatura/extrato, aponte "
+        "valores e vencimentos; se houver algo durável sobre mim, memorize com "
+        "memory_save."
+    )
+    b64 = base64.standard_b64encode(pdf_bytes).decode()
+    prompt_content = [
+        {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+        },
+        {"type": "text", "text": f"PDF anexado: {filename}\n{pedido}"},
+    ]
+
+    # Roda numa cópia do histórico para NÃO persistir o PDF gigante
+    work = msgs + [{"role": "user", "content": prompt_content}]
+    raw = _run(work, chat_id)
+    resposta, quer_audio = _split_audio_marker(raw)
+
+    # No histórico real, guarda só um registro compacto + a resposta
+    msgs.append(
+        {"role": "user", "content": f"[Enviei o PDF '{filename}' e pedi um resumo/análise.]"}
+    )
+    msgs.append({"role": "assistant", "content": resposta})
+    _save_turn(chat_id, f"[pdf: {filename}]", resposta)
     _trim(chat_id)
     return resposta, quer_audio
 

@@ -205,6 +205,27 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     arquivo = await doc.get_file()
     dados = bytes(await arquivo.download_as_bytearray())
+    legenda = update.message.caption or ""
+
+    # PDF: o Claude lê o arquivo nativamente (não tentamos extrair texto nós
+    # mesmos — falharia, é binário). Funciona até com PDF escaneado/imagem.
+    if nome.lower().endswith(".pdf") or doc.mime_type == "application/pdf":
+        try:
+            await asyncio.to_thread(uploads.save, chat_id, dados, "application/pdf", legenda or nome, "pdf", "pdf")
+        except Exception:  # noqa: BLE001
+            log.exception("Falha ao salvar o PDF para revisitar depois")
+
+        await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        try:
+            resposta, quer_audio = await asyncio.to_thread(
+                agent.handle_pdf, chat_id, nome, dados, legenda
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception("Erro ao processar PDF")
+            resposta, quer_audio = f"Deu erro ao analisar o PDF: {e}", False
+        await _responder(update, resposta, quer_audio)
+        return
+
     texto = _extrair_texto(nome, dados)
     if not texto:
         await update.message.reply_text(
@@ -213,7 +234,6 @@ async def on_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-    legenda = update.message.caption or ""
 
     # Salva o TEXTO já extraído (não o zip cru) pra poder ser revisitado depois
     try:

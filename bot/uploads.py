@@ -88,8 +88,9 @@ def list_files(chat_id: int, limit: int = 20) -> str:
 
 def view_file(file_id: int):
     """Reabre um arquivo salvo. Fotos voltam como imagem de verdade (bloco
-    'image'); documentos voltam como texto. Devolve uma lista de blocos de
-    conteúdo (formato aceito pela API em tool_result)."""
+    'image'); PDFs voltam como documento de verdade (bloco 'document', lido
+    nativamente pelo Claude); outros documentos voltam como texto. Devolve
+    uma lista de blocos de conteúdo (formato aceito pela API em tool_result)."""
     con = _conn()
     row = con.execute(
         "SELECT kind, path, media_type, caption FROM files WHERE id=?", (file_id,)
@@ -108,6 +109,12 @@ def view_file(file_id: int):
         b64 = base64.standard_b64encode(data).decode()
         return [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+            {"type": "text", "text": nota},
+        ]
+    if kind == "pdf":
+        b64 = base64.standard_b64encode(data).decode()
+        return [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
             {"type": "text", "text": nota},
         ]
     texto = data.decode("utf-8", errors="replace")[:100_000]
