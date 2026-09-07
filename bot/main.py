@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from telegram import Update
 from telegram.constants import ChatAction
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -38,7 +40,13 @@ async def _responder(update: Update, resposta: str, quer_audio: bool = False) ->
         except Exception:  # noqa: BLE001
             log.exception("Erro ao sintetizar áudio; caindo para texto")
     for pedaco in _quebrar(resposta, 4000):
-        await update.message.reply_text(pedaco)
+        try:
+            await update.message.reply_text(_md_telegram(pedaco), parse_mode="Markdown")
+        except BadRequest:
+            # Markdown desbalanceado (raro, ex: corte no meio de um "**"): manda
+            # em texto puro em vez de falhar silenciosamente.
+            log.warning("Markdown inválido, mandando em texto puro")
+            await update.message.reply_text(_sem_markdown(pedaco))
 
 
 def _autorizado(chat_id: int) -> bool:
@@ -320,6 +328,25 @@ def _quebrar(texto: str, tamanho: int) -> list[str]:
     if not texto:
         return ["(vazio)"]
     return [texto[i : i + tamanho] for i in range(0, len(texto), tamanho)]
+
+
+def _md_telegram(texto: str) -> str:
+    """Converte o markdown 'de chat' que o Claude escreve (**negrito**, títulos
+    com #, listas com '- ') para o que o Telegram entende (parse_mode=Markdown,
+    versão legada: *negrito* com um asterisco só)."""
+    texto = re.sub(r"^#{1,6}\s+(.*)$", r"*\1*", texto, flags=re.MULTILINE)
+    texto = re.sub(r"\*\*(.+?)\*\*", r"*\1*", texto, flags=re.DOTALL)
+    texto = re.sub(r"^[-*]\s+", "• ", texto, flags=re.MULTILINE)
+    return texto
+
+
+def _sem_markdown(texto: str) -> str:
+    """Tira toda marcação de markdown — usado como fallback em texto puro."""
+    texto = re.sub(r"^#{1,6}\s+", "", texto, flags=re.MULTILINE)
+    texto = re.sub(r"\*\*(.+?)\*\*", r"\1", texto, flags=re.DOTALL)
+    texto = re.sub(r"[*_`]", "", texto)
+    texto = re.sub(r"^[-]\s+", "• ", texto, flags=re.MULTILINE)
+    return texto
 
 
 def main() -> None:
