@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -15,6 +16,8 @@ from zoneinfo import ZoneInfo
 import anthropic
 
 from . import config, costs, memory, tools
+
+log = logging.getLogger(__name__)
 
 # timeout por chamada e poucas retentativas: evita que uma chamada fique presa
 _client = anthropic.Anthropic(
@@ -244,7 +247,7 @@ def _run(msgs: list[dict], chat_id: int) -> str:
         for _ in range(MAX_TOOL_LOOPS):
             resp = _client.messages.create(
                 model=config.MODEL,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=_system_prompt(),
                 tools=tools.TOOLS,
                 output_config={"effort": "low"},
@@ -269,7 +272,35 @@ def _run(msgs: list[dict], chat_id: int) -> str:
             if resp.stop_reason == "pause_turn":
                 continue
 
-            return "".join(b.text for b in resp.content if b.type == "text").strip() or "(sem resposta)"
+            texto = "".join(b.text for b in resp.content if b.type == "text").strip()
+
+            if resp.stop_reason == "max_tokens":
+                # Estourou o limite de tokens no meio da resposta (comum em
+                # pedidos de detalhamento muito grande, ex: recalcular dezenas
+                # de itens de uma vez). Se sobrou algo de texto, devolve com
+                # aviso; se não sobrou nada (gastou tudo "pensando"), pede pra
+                # dividir o pedido em vez de mostrar uma resposta muda.
+                log.warning(
+                    "max_tokens atingido (chat=%s, texto_parcial=%d chars, usage=%s)",
+                    chat_id, len(texto), resp.usage,
+                )
+                if texto:
+                    return texto + "\n\n_(cortei aqui por tamanho — me chama que eu continuo)_"
+                return (
+                    "Essa resposta ficou grande demais e travei no meio, sem conseguir "
+                    "escrever nada. Pode pedir de novo dividindo em partes menores? "
+                    "(ex: primeiro só o total corrigido, depois o detalhamento item por item)"
+                )
+
+            if not texto:
+                log.warning(
+                    "Resposta sem texto (chat=%s, stop_reason=%s, blocos=%s, usage=%s)",
+                    chat_id, resp.stop_reason,
+                    [b.type for b in resp.content], resp.usage,
+                )
+                return "Não consegui formular uma resposta agora. Pode tentar reformular?"
+
+            return texto
 
         # Excedeu o limite de passos: pode haver um bloco de ferramenta do
         # servidor sem resultado ainda — desfaz para não corromper o histórico
