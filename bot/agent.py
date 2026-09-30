@@ -292,14 +292,18 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
                 log.info("Escalando pro modelo completo no meio do laço (chat=%s)", chat_id)
                 modelo = config.MODEL
 
-            resp = _client.messages.create(
+            kwargs = dict(
                 model=modelo,
                 max_tokens=8192,
                 system=_system_prompt(),
                 tools=tools.TOOLS,
-                output_config={"effort": "low"},
                 messages=msgs,
             )
+            if not modelo.startswith("claude-haiku"):
+                # "effort" (esforço de raciocínio) só existe no Sonnet/Opus;
+                # o Haiku rejeita esse parâmetro com erro 400.
+                kwargs["output_config"] = {"effort": "low"}
+            resp = _client.messages.create(**kwargs)
             costs.record_anthropic(resp.usage, modelo)
             msgs.append({"role": "assistant", "content": resp.content})
 
