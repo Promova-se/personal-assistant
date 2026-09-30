@@ -332,9 +332,10 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
                 # aviso; se não sobrou nada (gastou tudo "pensando"), pede pra
                 # dividir o pedido em vez de mostrar uma resposta muda.
                 log.warning(
-                    "max_tokens atingido (chat=%s, texto_parcial=%d chars, usage=%s)",
-                    chat_id, len(texto), resp.usage,
+                    "max_tokens atingido (chat=%s, modelo=%s, texto_parcial=%d chars, usage=%s)",
+                    chat_id, modelo, len(texto), resp.usage,
                 )
+                del msgs[checkpoint:]  # turno incompleto — não deixa lixo no histórico
                 if texto:
                     return texto + "\n\n_(cortei aqui por tamanho — me chama que eu continuo)_"
                 return (
@@ -345,10 +346,18 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
 
             if not texto:
                 log.warning(
-                    "Resposta sem texto (chat=%s, stop_reason=%s, blocos=%s, usage=%s)",
-                    chat_id, resp.stop_reason,
+                    "Resposta sem texto (chat=%s, modelo=%s, stop_reason=%s, blocos=%s, usage=%s)",
+                    chat_id, modelo, resp.stop_reason,
                     [b.type for b in resp.content], resp.usage,
                 )
+                del msgs[checkpoint:]  # turno vazio/quebrado — não deixa lixo no histórico
+                if modelo == config.MODEL_LITE:
+                    # Fraqueza conhecida do modelo econômico: às vezes devolve
+                    # uma resposta vazia logo depois de usar uma ferramenta.
+                    # Tenta de novo, uma vez, com o modelo completo — invisível
+                    # pro Állan na maioria das vezes, em vez de desistir.
+                    log.info("Modelo econômico devolveu vazio; tentando de novo com o completo (chat=%s)", chat_id)
+                    return _run(msgs, chat_id, config.MODEL)
                 return "Não consegui formular uma resposta agora. Pode tentar reformular?"
 
             return texto
