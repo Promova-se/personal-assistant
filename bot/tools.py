@@ -253,10 +253,22 @@ TOOLS = TOOLS + uploads.TOOLS
 _DISPATCH.update(uploads.DISPATCH)
 
 # Acesso à internet (ferramentas do lado do servidor da Anthropic — sem dispatch:
-# a busca/leitura roda no servidor deles e volta já pronta).
+# a busca/leitura roda no servidor deles e volta já pronta). allowed_callers
+# "direct" é obrigatório pro Haiku (ele não suporta chamada "programmatic",
+# que é o padrão dessas ferramentas); Sonnet/Opus aceitam os dois.
 TOOLS = TOOLS + [
-    {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
-    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 5},
+    {
+        "type": "web_search_20260209",
+        "name": "web_search",
+        "max_uses": 5,
+        "allowed_callers": ["direct"],
+    },
+    {
+        "type": "web_fetch_20260209",
+        "name": "web_fetch",
+        "max_uses": 5,
+        "allowed_callers": ["direct"],
+    },
 ]
 
 
