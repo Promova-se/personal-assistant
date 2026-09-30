@@ -203,6 +203,8 @@ def _escolher_modelo(texto: str) -> str:
     compromisso, perguntas rápidas) vão pro modelo econômico. Pedidos de
     análise pesada/detalhada, ou mensagens muito longas (ex: texto colado),
     usam o modelo completo."""
+    if not config.HYBRID_MODEL:
+        return config.MODEL
     t = (texto or "").lower()
     if len(texto or "") > 500:
         return config.MODEL

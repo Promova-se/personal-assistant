@@ -26,6 +26,11 @@ MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5").strip()
 # de análise pesada continuam sempre no MODEL principal (mais caro, mais capaz).
 MODEL_LITE = os.getenv("CLAUDE_MODEL_LITE", "claude-haiku-4-5-20251001").strip()
 
+# Interruptor do modelo híbrido: HYBRID_MODEL=false no .env volta a usar
+# sempre o MODEL principal pra tudo (como era antes), sem precisar mexer em
+# código nem reverter commit — só mudar essa linha e reiniciar o serviço.
+HYBRID_MODEL = os.getenv("HYBRID_MODEL", "true").strip().lower() != "false"
+
 # Só responde a estes IDs de chat do Telegram (separados por vírgula).
 # Deixe vazio para descobrir seu ID: o bot vai te dizer qual é no primeiro
 # contato, aí você cola aqui.
