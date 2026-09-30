@@ -189,6 +189,27 @@ def reset(chat_id: int) -> None:
 
 _AUDIO_MARK = "[AUDIO]"
 
+# Sinais de que a mensagem de texto pede uma análise pesada/detalhada —
+# nesse caso usa o modelo completo em vez do econômico, mesmo sendo só texto.
+_PALAVRAS_PESADAS = (
+    "recalcul", "detalhad", "linha por linha", "item por item",
+    "análise completa", "com precisão", "revisa tudo", "revê tudo",
+    "todos os itens", "fatura inteira", "extrato inteiro", "conferir a fatura",
+)
+
+
+def _escolher_modelo(texto: str) -> str:
+    """Mensagens de texto do dia a dia (registrar gasto/refeição, marcar
+    compromisso, perguntas rápidas) vão pro modelo econômico. Pedidos de
+    análise pesada/detalhada, ou mensagens muito longas (ex: texto colado),
+    usam o modelo completo."""
+    t = (texto or "").lower()
+    if len(texto or "") > 500:
+        return config.MODEL
+    if any(p in t for p in _PALAVRAS_PESADAS):
+        return config.MODEL
+    return config.MODEL_LITE
+
 
 def _split_audio_marker(raw: str) -> tuple[str, bool]:
     """Detecta a marca [AUDIO] no início da resposta do Claude e a remove."""
@@ -209,6 +230,9 @@ def handle_message(
 
     img_idx = -1
     if image_bytes:
+        # Foto: sempre modelo completo — estimar caloria/ler evento numa imagem
+        # exige mais qualidade de visão do que vale a pena arriscar no econômico.
+        modelo = config.MODEL
         b64 = base64.standard_b64encode(image_bytes).decode()
         legenda = text or (
             "Analise esta imagem. Se for comida, registre a refeição; se for um "
@@ -232,9 +256,10 @@ def handle_message(
             }
         )
     else:
+        modelo = _escolher_modelo(text)
         msgs.append({"role": "user", "content": text})
 
-    raw = _run(msgs, chat_id)
+    raw = _run(msgs, chat_id, modelo)
     resposta, quer_audio = _split_audio_marker(raw)
 
     # Depois de processada, troca a imagem (pesada) por uma nota curta no
@@ -247,7 +272,7 @@ def handle_message(
     return resposta, quer_audio
 
 
-def _run(msgs: list[dict], chat_id: int) -> str:
+def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
     """Executa o laço de ferramentas sobre a lista de mensagens dada.
 
     Se algo der errado no meio (limite de passos ou exceção), desfaz tudo que
@@ -255,18 +280,27 @@ def _run(msgs: list[dict], chat_id: int) -> str:
     servidor (ex: execução de código) pode ficar 'pendurado' sem resposta, e
     toda mensagem seguinte passa a dar erro 400 (histórico corrompido).
     """
+    modelo = model or config.MODEL
     checkpoint = len(msgs)
     try:
-        for _ in range(MAX_TOOL_LOOPS):
+        for i in range(MAX_TOOL_LOOPS):
+            # Rede de segurança: se o modelo econômico não resolveu em várias
+            # rodadas de ferramenta, a tarefa provavelmente é mais complexa do
+            # que a mensagem parecia — escala pro modelo completo no meio da
+            # mesma conversa, em vez de continuar insistindo ou travar.
+            if modelo == config.MODEL_LITE and i == 4:
+                log.info("Escalando pro modelo completo no meio do laço (chat=%s)", chat_id)
+                modelo = config.MODEL
+
             resp = _client.messages.create(
-                model=config.MODEL,
+                model=modelo,
                 max_tokens=8192,
                 system=_system_prompt(),
                 tools=tools.TOOLS,
                 output_config={"effort": "low"},
                 messages=msgs,
             )
-            costs.record_anthropic(resp.usage, config.MODEL)
+            costs.record_anthropic(resp.usage, modelo)
             msgs.append({"role": "assistant", "content": resp.content})
 
             if resp.stop_reason == "tool_use":
@@ -343,9 +377,10 @@ def handle_document(
         pedido += "\n(Obs: conteúdo cortado por tamanho; resuma o que veio.)"
     prompt = f"Documento anexado: {filename}\n{pedido}\n\n--- CONTEÚDO ---\n{content}"
 
-    # Roda numa cópia do histórico para NÃO persistir o texto gigante
+    # Roda numa cópia do histórico para NÃO persistir o texto gigante.
+    # Documento: sempre modelo completo (análise/resumo pede mais qualidade).
     work = msgs + [{"role": "user", "content": prompt}]
-    raw = _run(work, chat_id)
+    raw = _run(work, chat_id, config.MODEL)
     resposta, quer_audio = _split_audio_marker(raw)
 
     # No histórico real, guarda só um registro compacto + a resposta
@@ -378,9 +413,10 @@ def handle_pdf(
         {"type": "text", "text": f"PDF anexado: {filename}\n{pedido}"},
     ]
 
-    # Roda numa cópia do histórico para NÃO persistir o PDF gigante
+    # Roda numa cópia do histórico para NÃO persistir o PDF gigante.
+    # PDF: sempre modelo completo (fatura/extrato pede precisão de leitura).
     work = msgs + [{"role": "user", "content": prompt_content}]
-    raw = _run(work, chat_id)
+    raw = _run(work, chat_id, config.MODEL)
     resposta, quer_audio = _split_audio_marker(raw)
 
     # No histórico real, guarda só um registro compacto + a resposta

@@ -41,30 +41,41 @@ def _db() -> sqlite3.Connection:
             ts TEXT NOT NULL,
             day TEXT NOT NULL,
             api TEXT NOT NULL,      -- 'anthropic' | 'openai'
-            usd REAL NOT NULL
+            usd REAL NOT NULL,
+            model TEXT DEFAULT ''   -- só preenchido pra 'anthropic'
         )
         """
     )
+    cols = [r[1] for r in con.execute("PRAGMA table_info(costs)").fetchall()]
+    if "model" not in cols:  # migra bancos antigos, criados antes do modelo híbrido
+        con.execute("ALTER TABLE costs ADD COLUMN model TEXT DEFAULT ''")
     return con
 
 
-def _add(api: str, usd: float) -> None:
+def _add(api: str, usd: float, model: str = "") -> None:
     if usd <= 0:
         return
     now = datetime.now(_TZ)
     con = _db()
     with con:
         con.execute(
-            "INSERT INTO costs (ts, day, api, usd) VALUES (?,?,?,?)",
-            (now.isoformat(), now.strftime("%Y-%m-%d"), api, usd),
+            "INSERT INTO costs (ts, day, api, usd, model) VALUES (?,?,?,?,?)",
+            (now.isoformat(), now.strftime("%Y-%m-%d"), api, usd, model),
         )
     con.close()
 
 
 def _rates(model: str, day: str) -> tuple[float, float]:
-    if model == "claude-sonnet-5" and day <= "2026-08-31":
+    if model.startswith("claude-sonnet-5") and day <= "2026-08-31":
         return _SONNET5_INTRO
-    return _RATES.get(model, _RATES["claude-sonnet-5"])
+    if model in _RATES:
+        return _RATES[model]
+    # IDs vêm às vezes com sufixo de data (ex: claude-haiku-4-5-20251001) —
+    # casa pelo prefixo pra não cair sem querer no preço do Sonnet.
+    for prefixo, taxa in _RATES.items():
+        if model.startswith(prefixo):
+            return taxa
+    return _RATES["claude-sonnet-5"]
 
 
 def record_anthropic(usage, model: str = "") -> None:
@@ -86,7 +97,7 @@ def record_anthropic(usage, model: str = "") -> None:
         stu = getattr(usage, "server_tool_use", None)
         if stu is not None:
             usd += (getattr(stu, "web_search_requests", 0) or 0) * WEB_SEARCH_USD_EACH
-        _add("anthropic", usd)
+        _add("anthropic", usd, model)
     except Exception:  # noqa: BLE001
         pass
 
@@ -124,6 +135,12 @@ def summary(period: str = "month") -> str:
         "SELECT api, SUM(usd) FROM costs WHERE day>=? AND day<=? GROUP BY api",
         (ini, fim),
     ).fetchall()
+    modelos = con.execute(
+        "SELECT model, SUM(usd), COUNT(*) FROM costs "
+        "WHERE api='anthropic' AND day>=? AND day<=? AND model<>'' "
+        "GROUP BY model ORDER BY SUM(usd) DESC",
+        (ini, fim),
+    ).fetchall()
     con.close()
     por = {api: v for api, v in rows}
     ant = por.get("anthropic", 0.0)
@@ -131,13 +148,14 @@ def summary(period: str = "month") -> str:
     total = ant + oai
     if total == 0:
         return f"Sem gastos registrados em {rotulo}."
-    return (
-        f"Gasto estimado nas APIs — {rotulo}:\n"
-        f"- Anthropic (cérebro + web): US$ {ant:.2f}\n"
-        f"- OpenAI (áudio): US$ {oai:.2f}\n"
-        f"- Total: US$ {total:.2f}\n"
-        f"(estimativa por uso; o valor oficial fica no painel de cada API)"
-    )
+    linhas = [f"Gasto estimado nas APIs — {rotulo}:", f"- Anthropic (cérebro + web): US$ {ant:.2f}"]
+    for modelo, usd, n in modelos:
+        apelido = "econômico" if "haiku" in modelo else "completo"
+        linhas.append(f"    • {modelo} ({apelido}): US$ {usd:.2f} em {n} chamadas")
+    linhas.append(f"- OpenAI (áudio): US$ {oai:.2f}")
+    linhas.append(f"- Total: US$ {total:.2f}")
+    linhas.append("(estimativa por uso; o valor oficial fica no painel de cada API)")
+    return "\n".join(linhas)
 
 
 TOOLS = [

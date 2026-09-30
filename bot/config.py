@@ -21,6 +21,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 # reduzir custo por mensagem.
 MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5").strip()
 
+# Modelo "econômico" para mensagens de texto simples do dia a dia (registrar
+# gasto/refeição, marcar compromisso, perguntas rápidas). Foto, PDF e pedidos
+# de análise pesada continuam sempre no MODEL principal (mais caro, mais capaz).
+MODEL_LITE = os.getenv("CLAUDE_MODEL_LITE", "claude-haiku-4-5-20251001").strip()
+
 # Só responde a estes IDs de chat do Telegram (separados por vírgula).
 # Deixe vazio para descobrir seu ID: o bot vai te dizer qual é no primeiro
 # contato, aí você cola aqui.
