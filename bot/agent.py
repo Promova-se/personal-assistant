@@ -313,6 +313,10 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
                 resultados = []
                 for bloco in resp.content:
                     if bloco.type == "tool_use":
+                        # Log leve de qual ferramenta foi chamada — sem isso, fica
+                        # impossível diagnosticar depois um caso de "não lembrou"
+                        # (saber se ele nem tentou consultar, ou consultou errado).
+                        log.info("Tool %s(%s) [chat=%s, modelo=%s]", bloco.name, bloco.input or {}, chat_id, modelo)
                         saida = tools.run_tool(bloco.name, bloco.input or {}, chat_id)
                         resultados.append(
                             {"type": "tool_result", "tool_use_id": bloco.id, "content": saida}
