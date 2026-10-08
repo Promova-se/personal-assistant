@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 
 from . import config
 
@@ -38,6 +39,99 @@ def list_topics() -> str:
             primeira = ""
         linhas.append(f"- {nome}" + (f" — {primeira}" if primeira else ""))
     return "\n".join(linhas)
+
+
+# ---------------------------------------------------------------------------
+# Consulta automática: traz o assunto certo pro contexto SEM depender do modelo
+# lembrar de chamar knowledge_read (era a causa de "esquecer" o abastecimento).
+# ---------------------------------------------------------------------------
+
+_STOP = {
+    "quando", "qual", "quais", "quanto", "quantos", "quanta", "como", "onde", "porque",
+    "ultimo", "ultima", "ultimos", "primeiro", "foi", "fiz", "fez", "fui", "meu", "minha",
+    "meus", "minhas", "para", "pelo", "pela", "isso", "esse", "essa", "esta", "este",
+    "aqui", "tem", "tinha", "uma", "umas", "uns", "com", "dos", "das", "que", "nao",
+    "por", "mais", "voce", "ainda", "sobre", "hoje", "ontem", "agora", "depois", "antes",
+    "pode", "quero", "queria", "preciso", "lembra", "lembrar", "lembro", "saber", "disse",
+    "falei", "falou", "mandei", "registrei", "registrar", "registro", "anotei", "salvei",
+    "algo", "coisa", "coisas", "tudo", "todo", "toda", "todos", "muito", "pouco", "bem",
+}
+
+
+def _norm(s: str) -> str:
+    s = unicodedata.normalize("NFD", s.lower())
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+
+def _stems(texto: str) -> set[str]:
+    """Radicais curtos (5 letras, sem plural) — 'abastecimento', 'abasteci' e
+    'abastecer' viram todos 'abast'."""
+    out: set[str] = set()
+    for w in re.findall(r"[a-z0-9]+", _norm(texto)):
+        if len(w) < 4 or w in _STOP:
+            continue
+        if len(w) > 4 and w.endswith("s"):
+            w = w[:-1]
+        out.add(w[:5])
+    return out
+
+
+def _load_all() -> dict[str, str]:
+    d = _dir()
+    out: dict[str, str] = {}
+    for f in sorted(os.listdir(d)):
+        if f.endswith(".md"):
+            try:
+                with open(os.path.join(d, f), encoding="utf-8") as fh:
+                    out[f[:-3]] = fh.read().strip()
+            except OSError:
+                pass
+    return out
+
+
+def index() -> str:
+    """Índice curto dos assuntos (nome + 1ª linha descritiva), p/ ir no prompt."""
+    linhas = []
+    for nome, conteudo in _load_all().items():
+        desc = next(
+            (l.strip() for l in conteudo.splitlines() if l.strip() and not l.startswith("#")),
+            "",
+        )
+        linhas.append(f"- {nome}" + (f" — {desc[:90]}" if desc else ""))
+    return "\n".join(linhas)
+
+
+def relevant(texto: str, limite_total: int = 6000, limite_topico: int = 3500) -> str:
+    """Devolve o conteúdo dos assuntos que a mensagem toca (pelo nome do assunto,
+    ou por palavras que só aparecem em 1-2 assuntos). Vazio se nada bater."""
+    topicos = _load_all()
+    q = _stems(texto)
+    if not topicos or not q:
+        return ""
+    por_topico = {n: _stems(c) for n, c in topicos.items()}
+    freq: dict[str, int] = {}
+    for st in por_topico.values():
+        for s in st:
+            freq[s] = freq.get(s, 0) + 1
+
+    achados = []
+    for nome, conteudo in topicos.items():
+        hit_nome = q & _stems(nome.replace("-", " ").replace("_", " "))
+        hit_conteudo = {s for s in q & por_topico[nome] if freq[s] <= 2}
+        score = len(hit_nome) * 3 + len(hit_conteudo)
+        if score:
+            achados.append((score, nome, conteudo))
+    achados.sort(key=lambda x: -x[0])
+
+    blocos, usado = [], 0
+    for _score, nome, conteudo in achados:
+        if len(conteudo) > limite_topico:  # diário cresce no fim: guarda começo + fim
+            conteudo = conteudo[:400] + "\n[... trecho antigo omitido ...]\n" + conteudo[-(limite_topico - 400):]
+        if usado + len(conteudo) > limite_total:
+            break
+        blocos.append(f"### {nome}\n{conteudo}")
+        usado += len(conteudo)
+    return "\n\n".join(blocos)
 
 
 def read_topic(name: str) -> str:

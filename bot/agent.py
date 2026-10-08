@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import anthropic
 
-from . import config, costs, memory, tools
+from . import config, costs, knowledge, memory, tools
 
 log = logging.getLogger(__name__)
 
@@ -27,13 +27,14 @@ _client = anthropic.Anthropic(
 # Histórico por chat_id -> lista de mensagens (formato da API)
 _history: dict[int, list[dict]] = {}
 
-MAX_TURNS = 12  # mantém as últimas ~6 trocas na RAM para não crescer sem limite
+MAX_TURNS = 16  # trocas (falas do Állan + resposta) mantidas na RAM
+KEEP_FULL_TURNS = 2  # só as 2 últimas trocas guardam os blocos de ferramenta
 MAX_TOOL_LOOPS = 16  # análises com várias fotos/buscas podem precisar de mais rodadas
 
 # Persistência do fio da conversa em disco (só o texto das trocas), para o bot
 # continuar lembrando do assunto mesmo após reiniciar.
 _SESS_DIR = os.path.join(os.path.dirname(config.MEMORY_FILE), "sessions")
-MAX_DISK = 24  # últimas ~12 trocas guardadas em disco
+MAX_DISK = 40  # últimas ~20 trocas (só texto) guardadas em disco
 
 
 def _disk_path(chat_id: int) -> str:
@@ -70,7 +71,7 @@ def _get_history(chat_id: int) -> list[dict]:
     return msgs
 
 
-def _system_prompt() -> list[dict]:
+def _system_prompt(consulta: str = "") -> list[dict]:
     base = (
         "Você é o assistente pessoal do Állan, falando por Telegram em português "
         "do Brasil. Seja direto, prático e cordial — respostas curtas, sem enrolação. "
@@ -150,6 +151,14 @@ def _system_prompt() -> list[dict]:
         "marca literal [AUDIO] bem no início (sem espaço antes), seguida do texto que você "
         "quer que seja falado — escreva como fala, sem markdown/emojis em excesso. Se ele "
         "disser para voltar a responder em texto, pare de usar a marca.\n\n"
+        "NUNCA DIGA QUE NÃO LEMBRA sem consultar antes: o que o Állan já te contou/registrou "
+        "está na memória (abaixo), na base de conhecimento (índice e material relevante "
+        "abaixo, ou knowledge_read), nos registros (diet_summary, ex_summary, fin_summary, "
+        "reminder_list) ou na agenda/Trello. Se a pergunta toca num assunto salvo e o "
+        "conteúdo não veio em 'Material salvo relevante', chame knowledge_read ANTES de "
+        "responder — uma consulta a mais custa muito menos que ele ter que repetir tudo. "
+        "Pra um intervalo de dias, faça UMA chamada com start_date/end_date (nunca uma "
+        "chamada por dia).\n\n"
         "BASE DE CONHECIMENTO (knowledge_*): você tem assuntos que pode dominar. Quando o "
         "tema tiver material salvo (ex: conselhos amorosos → 'cupido'), consulte "
         "knowledge_read antes de responder. O Állan pode te ENSINAR coisas novas a qualquer "
@@ -173,6 +182,18 @@ def _system_prompt() -> list[dict]:
     perfil = memory.load()
     if perfil:
         volatil += "\n\n## O que você já sabe sobre o Állan (memória)\n" + perfil
+    try:
+        indice = knowledge.index()
+        if indice:
+            volatil += "\n\n## Assuntos salvos na base de conhecimento\n" + indice
+        material = knowledge.relevant(consulta) if consulta else ""
+        if material:
+            volatil += (
+                "\n\n## Material salvo relevante para esta mensagem (já consultado — "
+                "use direto, sem pedir de novo)\n" + material
+            )
+    except Exception:  # noqa: BLE001
+        log.exception("Falha ao montar o contexto da base de conhecimento")
     return [
         {"type": "text", "text": base, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": volatil},
@@ -284,6 +305,9 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
     """
     modelo = model or config.MODEL
     checkpoint = len(msgs)
+    # Últimas falas do Állan (incluindo a atual): usadas pra trazer, já no
+    # contexto, o material salvo que elas tocam (ex: "abastecimento" → carro).
+    consulta = _consulta_de(msgs)
     try:
         for i in range(MAX_TOOL_LOOPS):
             # Rede de segurança: se o modelo econômico não resolveu em várias
@@ -297,7 +321,7 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
             kwargs = dict(
                 model=modelo,
                 max_tokens=8192,
-                system=_system_prompt(),
+                system=_system_prompt(consulta),
                 tools=tools.TOOLS,
                 messages=msgs,
             )
@@ -448,20 +472,6 @@ def handle_pdf(
     return resposta, quer_audio
 
 
-def _trim(chat_id: int) -> None:
-    msgs = _history.get(chat_id, [])
-    if len(msgs) > MAX_TURNS:
-        # Descarta o começo, mas garante que a lista não comece com tool_result
-        corte = len(msgs) - MAX_TURNS
-        novo = msgs[corte:]
-        while novo and novo[0].get("role") != "user":
-            novo = novo[1:]
-        # remove eventual user cujo conteúdo seja só tool_result órfão
-        while novo and _is_tool_result_only(novo[0]):
-            novo = novo[1:]
-        _history[chat_id] = novo
-
-
 def _is_tool_result_only(msg: dict) -> bool:
     content = msg.get("content")
     if isinstance(content, list):
@@ -469,3 +479,66 @@ def _is_tool_result_only(msg: dict) -> bool:
             isinstance(b, dict) and b.get("type") == "tool_result" for b in content
         )
     return False
+
+
+def _is_turn_start(msg: dict) -> bool:
+    """Mensagem em que o Állan realmente fala (não o retorno de uma ferramenta)."""
+    return msg.get("role") == "user" and not _is_tool_result_only(msg)
+
+
+def _texto_de(msg: dict) -> str:
+    """Só o texto de uma mensagem (usuário ou assistente), sem blocos de ferramenta."""
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    partes = []
+    for b in content or []:
+        if isinstance(b, dict):
+            if b.get("type") == "text":
+                partes.append(b.get("text", ""))
+        elif getattr(b, "type", "") == "text":
+            partes.append(b.text)
+    return "".join(partes).strip()
+
+
+def _consulta_de(msgs: list[dict], quantas: int = 3) -> str:
+    """Junta as últimas falas do Állan — serve de 'pergunta' pra buscar o material
+    salvo relevante (inclui as anteriores pra acompanhar 'e na cidade?')."""
+    falas = [_texto_de(m) for m in msgs if _is_turn_start(m)]
+    return "\n".join(f for f in falas[-quantas:] if f)
+
+
+def _compact_history(msgs: list[dict]) -> list[dict]:
+    """Mantém as últimas MAX_TURNS trocas. As antigas viram só 'o que o Állan disse
+    + resposta final' (sem blocos de ferramenta, que ocupam espaço e custam token);
+    as KEEP_FULL_TURNS mais recentes ficam completas (ids, resultados). Assim cabe
+    muito mais conversa do mesmo dia no mesmo custo — antes, cada troca com
+    ferramenta gastava 3-4 das 12 mensagens guardadas (≈3 trocas de memória)."""
+    inicios = [i for i, m in enumerate(msgs) if _is_turn_start(m)]
+    if not inicios:
+        return []
+    fins = inicios[1:] + [len(msgs)]
+    trocas = [msgs[a:b] for a, b in zip(inicios, fins)][-MAX_TURNS:]
+
+    out: list[dict] = []
+    for idx, troca in enumerate(trocas):
+        if idx >= len(trocas) - KEEP_FULL_TURNS:
+            out.extend(troca)
+            continue
+        fala = _texto_de(troca[0])
+        resposta = ""
+        for m in reversed(troca):
+            if m.get("role") == "assistant":
+                resposta = _texto_de(m)
+                if resposta:
+                    break
+        if fala and resposta:  # troca sem resposta (falhou) é descartada
+            out.append({"role": "user", "content": fala})
+            out.append({"role": "assistant", "content": resposta})
+    return out
+
+
+def _trim(chat_id: int) -> None:
+    msgs = _history.get(chat_id)
+    if msgs:
+        _history[chat_id] = _compact_history(msgs)

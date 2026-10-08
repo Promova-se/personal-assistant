@@ -195,6 +195,29 @@ def summary(
 
     MOSTRAR_ATE = 15
     linhas.append("")
+    if not moeda and ini != fim:
+        # Intervalo de treino/etc: lista dia a dia (inclui dias sem registro como
+        # '—'), pra o Claude não precisar de uma chamada por dia.
+        try:
+            d, ultimo = datetime.fromisoformat(ini).date(), datetime.fromisoformat(fim).date()
+        except ValueError:
+            d = ultimo = None
+        if d and (ultimo - d).days <= 62:
+            nomes = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
+            linhas.append("Dia a dia:")
+            while d <= ultimo:
+                itens = [r for r in rows if r[0] == d.isoformat()]
+                rot = f"  • {nomes[d.weekday()]} {d.strftime('%d/%m')}:"
+                if itens:
+                    det = "; ".join(
+                        f"#{r[6]} {r[1]}" + (f" ({fmt(r[2])})" if r[2] is not None else "")
+                        for r in itens
+                    )
+                    linhas.append(f"{rot} {det}")
+                else:
+                    linhas.append(f"{rot} —")
+                d += timedelta(days=1)
+            return "\n".join(linhas)
     if len(rows) <= MOSTRAR_ATE:
         linhas.append(f"Lançamentos ({len(rows)}):")
         for r in rows:
