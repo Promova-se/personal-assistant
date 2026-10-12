@@ -301,7 +301,7 @@ async def _cleanup_loop(app: Application) -> None:
 
 async def _sitewatch_loop(app: Application) -> None:
     """Roda em segundo plano: a cada 2 min lê o painel de monitoramento e avisa
-    no Telegram quando uma loja cai, volta, ou o próprio painel para de checar."""
+    no Telegram quando uma loja CAI (ou o próprio painel para de checar)."""
     while True:
         try:
             msgs, novo_estado = await asyncio.to_thread(sitewatch.poll)

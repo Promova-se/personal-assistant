@@ -6,12 +6,13 @@ Telegram. O alerta embutido do painel dispara na PRIMEIRA checagem que falha
 (dezenas de falsos alarmes por semana, a maioria um único timeout) e também
 avisa "lento", então não serve direto.
 
-Regras:
+Regras (definidas pelo Állan: só importa saber QUE UM SITE DELE CAIU):
 - só avisa dos sites da categoria "mine" (config.SITEWATCH_CATEGORIES);
-- "caiu" = as últimas 2 checagens falharam (~10 min); "voltou" = as 2 últimas deram certo;
-- um aviso por queda (vários sites caindo juntos viram UMA mensagem), mais um
-  lembrete a cada 24h se o site seguir fora;
-- se o próprio painel parar de checar, avisa (senão o silêncio pareceria "tudo certo").
+- "caiu" = as últimas 2 checagens falharam (~10 min). Um aviso por queda (vários
+  sites caindo juntos viram UMA mensagem). Sem aviso de "voltou", sem lembrete,
+  sem lento/SSL/tags — ele não quer;
+- única exceção: se o próprio painel parar de checar, avisa uma vez (senão o
+  silêncio pareceria "tudo certo").
 """
 from __future__ import annotations
 
@@ -28,7 +29,6 @@ _TZ = ZoneInfo(config.TIMEZONE)
 
 CONFIRMAR = 2           # checagens seguidas para confirmar queda / volta
 PAINEL_PAROU_MIN = 20   # sem nenhuma checagem nova há mais que isso = painel parou
-LEMBRETE_H = 24         # relembra, a cada tanto, enquanto o site seguir fora
 AGRUPAR_ATE_MIN = 10    # espera até isso por outros sites do mesmo evento, p/ 1 mensagem só
 HISTORICO = 300         # checagens lidas por site (~25h, a cada 5 min)
 AVISOS_GUARDADOS = 6    # últimos avisos lembrados (contexto p/ o bot)
@@ -111,16 +111,6 @@ def _inicio_falha(rows) -> int:
     return inicio
 
 
-def _inicio_ok(rows) -> int:
-    """Quando começou a sequência de checagens boas que termina na mais recente."""
-    inicio = rows[0]["checkedAt"]
-    for c in rows:
-        if not c["online"]:
-            break
-        inicio = c["checkedAt"]
-    return inicio
-
-
 # ---------------------------------------------------------------------------
 # Estado persistido (pra não repetir aviso depois de reiniciar o bot)
 # ---------------------------------------------------------------------------
@@ -131,7 +121,7 @@ def carregar_estado() -> dict:
             e = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         e = {}
-    e.setdefault("fora", {})            # site_id -> {nome, url, desde, motivo, lembrado}
+    e.setdefault("fora", {})            # site_id -> {nome, url, desde, motivo}
     e.setdefault("painel_parado", False)
     e.setdefault("avisos", [])          # [{em, texto}] — o que já foi avisado
     return e
@@ -181,14 +171,13 @@ def poll(agora_ms: int | None = None) -> tuple[list[str], dict]:
                     "Enquanto isso eu não consigo avisar de quedas."
                 )
             return _fechar(estado, estado["fora"], True, msgs, agora)
-        if estado["painel_parado"]:
-            msgs.append("🟢 O painel de monitoramento voltou a checar os sites.")
+        # (o painel voltar a checar é registrado em silêncio: o estado vira "não parado")
 
         ids = {s["id"] for s in sites}
         # cópia, sem sites que foram desativados/removidos/mudaram de categoria
         fora = {sid: dict(v) for sid, v in estado["fora"].items() if sid in ids}
-        novos, lembretes, voltaram = [], [], []   # novos: (site, rows); voltaram: (site_id, rows)
-        quase_caindo = quase_voltando = 0         # 1ª falha / 1ª checagem boa, ainda sem confirmar
+        novos = []          # (site, checagens) que acabaram de cair
+        quase_caindo = 0    # 1ª falha ainda sem confirmar
 
         for s in sites:
             rows = _checagens(con, s["id"], agora)
@@ -201,18 +190,11 @@ def poll(agora_ms: int | None = None) -> tuple[list[str], dict]:
 
             if caiu and s["id"] not in fora:
                 novos.append((s, rows))
-            elif caiu:
-                f = fora[s["id"]]
-                f["motivo"] = _motivo(rows[0])
-                if agora - f["lembrado"] >= LEMBRETE_H * 3_600_000:
-                    f["lembrado"] = agora
-                    lembretes.append(f)
             elif voltou and s["id"] in fora:
-                voltaram.append((s["id"], rows))
-            elif s["id"] in fora:
-                if rows[0]["online"]:
-                    quase_voltando += 1
-            elif not rows[0]["online"]:
+                # Voltou: sem aviso (o Állan não quer), mas some do "fora" — senão a
+                # próxima queda deste site não geraria aviso.
+                del fora[s["id"]]
+            elif not caiu and not rows[0]["online"] and s["id"] not in fora:
                 quase_caindo += 1
     finally:
         con.close()
@@ -224,38 +206,22 @@ def poll(agora_ms: int | None = None) -> tuple[list[str], dict]:
     janela = AGRUPAR_ATE_MIN * 60_000
     if novos and quase_caindo and agora - min(_inicio_falha(r) for _s, r in novos) < janela:
         novos = []
-    if voltaram and quase_voltando and agora - min(_inicio_ok(r) for _i, r in voltaram) < janela:
-        voltaram = []
 
-    novos_fora = []
+    avisar = []
     for s, rows in novos:
         fora[s["id"]] = {
             "nome": s["name"], "url": s["url"], "desde": _inicio_falha(rows),
-            "motivo": _motivo(rows[0]), "lembrado": agora,
+            "motivo": _motivo(rows[0]),
         }
-        novos_fora.append(fora[s["id"]])
-    novos = novos_fora
-    voltaram = [(fora.pop(sid), _inicio_ok(rows)) for sid, rows in voltaram]
+        avisar.append(fora[s["id"]])
 
-    def linha(f: dict) -> str:
-        return (
+    if avisar:
+        linhas = [
             f"• {f['nome']} — {f['motivo']} "
             f"(desde {_hora(f['desde'], agora)}, há {_dur(agora - f['desde'])})"
-        )
-
-    if novos:
-        msgs.append(_bloco("🔴 Site fora do ar", "🔴 {n} sites fora do ar", [linha(f) for f in novos]))
-    if lembretes:
-        msgs.append(_bloco("🔴 Ainda fora do ar", "🔴 {n} sites ainda fora do ar", [linha(f) for f in lembretes]))
-    if voltaram:
-        msgs.append(_bloco(
-            "🟢 Voltou ao ar", "🟢 {n} sites voltaram ao ar",
-            [
-                f"• {f['nome']} — ficou fora {_dur(ok - f['desde'])} "
-                f"({_hora(f['desde'], agora)} às {_hora(ok, agora)})"
-                for f, ok in voltaram
-            ],
-        ))
+            for f in avisar
+        ]
+        msgs.append(_bloco("🔴 Site fora do ar", "🔴 {n} sites fora do ar", linhas))
     return _fechar(estado, fora, False, msgs, agora)
 
 
