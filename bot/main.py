@@ -20,7 +20,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import agent, config, costs, reminders, transcribe, tts, uploads
+from . import agent, config, costs, reminders, sitewatch, transcribe, tts, uploads
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -299,9 +299,44 @@ async def _cleanup_loop(app: Application) -> None:
             break
 
 
+async def _sitewatch_loop(app: Application) -> None:
+    """Roda em segundo plano: a cada 2 min lê o painel de monitoramento e avisa
+    no Telegram quando uma loja cai, volta, ou o próprio painel para de checar."""
+    while True:
+        try:
+            msgs, novo_estado = await asyncio.to_thread(sitewatch.poll)
+            enviou_tudo = True
+            for texto in msgs:
+                for chat_id in config.ALLOWED_CHAT_IDS:
+                    try:
+                        await app.bot.send_message(
+                            chat_id=chat_id, text=texto, disable_web_page_preview=True
+                        )
+                    except Exception:  # noqa: BLE001
+                        enviou_tudo = False
+                        log.exception("Falha ao enviar aviso do monitor de sites")
+            if msgs:
+                log.info("Monitor de sites: %d aviso(s) %s", len(msgs), "enviado(s)" if enviou_tudo else "COM FALHA")
+            # Só grava o estado se o envio deu certo; se falhou, tenta de novo no
+            # próximo ciclo (melhor repetir um aviso do que perder uma queda).
+            if enviou_tudo:
+                await asyncio.to_thread(sitewatch.salvar_estado, novo_estado)
+        except asyncio.CancelledError:
+            break
+        except Exception:  # noqa: BLE001
+            log.exception("Erro no monitor de sites")
+        try:
+            await asyncio.sleep(120)
+        except asyncio.CancelledError:
+            break
+
+
 async def _post_init(app: Application) -> None:
     app.create_task(_reminders_loop(app), update=None)
     app.create_task(_cleanup_loop(app), update=None)
+    if config.SITEWATCH_ENABLED:
+        app.create_task(_sitewatch_loop(app), update=None)
+        log.info("Monitor de sites ativo (categorias: %s)", ",".join(config.SITEWATCH_CATEGORIES))
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:

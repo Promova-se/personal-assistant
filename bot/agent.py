@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import anthropic
 
-from . import config, costs, knowledge, memory, tools
+from . import config, costs, knowledge, memory, sitewatch, tools
 
 log = logging.getLogger(__name__)
 
@@ -127,6 +127,11 @@ def _system_prompt(consulta: str = "") -> list[dict]:
         "quando precisar de informação atual (notícias, preços, cotações, horários, clima, "
         "pesquisa) ou pra resumir um link que ele mandar. Pesquise só quando agregar valor e "
         "cite a fonte de forma curta. Não use pra coisas que você já sabe.\n\n"
+        "LOJAS/SITES (sites_status): as lojas do Állan são vigiadas por um painel de "
+        "monitoramento, e quando uma cai ou volta o aviso chega sozinho no Telegram (você "
+        "não precisa fazer nada). Se ele perguntar como estão os sites/lojas, se algum caiu "
+        "ou como foi nas últimas horas, use sites_status. Não invente a causa de uma queda: "
+        "o painel só sabe se respondeu e com qual erro.\n\n"
         "CUSTOS: se ele perguntar quanto gastou nas APIs, use cost_summary (por API: "
         "Anthropic e OpenAI). Lembre que é estimativa por uso.\n\n"
         "LEMBRETES/MENSAGENS PROGRAMADAS (reminder_*): quando ele pedir para você mandar "
@@ -194,6 +199,16 @@ def _system_prompt(consulta: str = "") -> list[dict]:
             )
     except Exception:  # noqa: BLE001
         log.exception("Falha ao montar o contexto da base de conhecimento")
+    if config.SITEWATCH_ENABLED:
+        try:
+            avisos = sitewatch.avisos_recentes()
+            if avisos:
+                volatil += (
+                    "\n\n## Avisos automáticos de sites que você mandou ao Állan nas últimas 24h "
+                    "(se ele comentar ou perguntar sobre um aviso, é disso que se trata)\n" + avisos
+                )
+        except Exception:  # noqa: BLE001
+            log.exception("Falha ao ler os avisos do monitor de sites")
     return [
         {"type": "text", "text": base, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": volatil},

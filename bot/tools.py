@@ -252,6 +252,14 @@ from . import uploads  # noqa: E402
 TOOLS = TOOLS + uploads.TOOLS
 _DISPATCH.update(uploads.DISPATCH)
 
+# Monitor de sites (painel /opt/status). Só entra se o painel existir neste servidor;
+# os AVISOS de queda saem do laço em main.py — aqui só a consulta ("como estão as lojas?").
+if config.SITEWATCH_ENABLED:
+    from . import sitewatch  # noqa: E402
+
+    TOOLS = TOOLS + sitewatch.TOOLS
+    _DISPATCH.update(sitewatch.DISPATCH)
+
 # Acesso à internet (ferramentas do lado do servidor da Anthropic — sem dispatch:
 # a busca/leitura roda no servidor deles e volta já pronta). allowed_callers
 # "direct" é obrigatório pro Haiku (ele não suporta chamada "programmatic",

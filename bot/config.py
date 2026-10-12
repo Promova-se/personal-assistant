@@ -77,6 +77,19 @@ TRACKER_DB = os.getenv("TRACKER_DB", str(ROOT / "data" / "tracker.db")).strip()
 # Base de conhecimento: pasta de arquivos .md que o bot consulta e pode ampliar.
 KNOWLEDGE_DIR = os.getenv("KNOWLEDGE_DIR", str(ROOT / "data" / "knowledge")).strip()
 
+# Painel de monitoramento de sites (projeto /opt/status, no mesmo servidor). O
+# assistente só LÊ o banco dele pra avisar no Telegram quando uma loja cai/volta.
+# Só liga se o arquivo existir (no PC de desenvolvimento fica desligado);
+# SITEWATCH=false desliga na marra. SITEWATCH_CATEGORIES: "mine" = minhas lojas,
+# "competitor" = concorrentes (vírgula p/ vários).
+STATUS_DB = os.getenv("STATUS_DB", "/opt/status/prisma/dev.db").strip()
+SITEWATCH_ENABLED = (
+    os.path.exists(STATUS_DB) and os.getenv("SITEWATCH", "true").strip().lower() != "false"
+)
+SITEWATCH_CATEGORIES = [
+    c.strip() for c in os.getenv("SITEWATCH_CATEGORIES", "mine").split(",") if c.strip()
+]
+
 # Transcrição de áudio (OpenAI Whisper). Só habilita se a chave existir.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 AUDIO_ENABLED = bool(OPENAI_API_KEY)
