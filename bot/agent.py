@@ -72,7 +72,7 @@ def _get_history(chat_id: int) -> list[dict]:
     return msgs
 
 
-def _system_prompt(consulta: str = "") -> list[dict]:
+def _system_prompt(consulta: str = "", aviso: str = "") -> list[dict]:
     base = (
         "Você é o assistente pessoal do Állan, falando por Telegram em português "
         "do Brasil. Seja direto, prático e cordial — respostas curtas, sem enrolação. "
@@ -204,6 +204,8 @@ def _system_prompt(consulta: str = "") -> list[dict]:
     perfil = memory.load()
     if perfil:
         volatil += "\n\n## O que você já sabe sobre o Állan (memória)\n" + perfil
+    if aviso:
+        volatil += "\n\n## ATENÇÃO (esta mensagem)\n" + aviso
     try:
         indice = knowledge.index()
         if indice:
@@ -386,6 +388,7 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
     chamou_tool = False
     retentou = False
     forcar_tool = False
+    aviso_retry = ""
     try:
         for i in range(MAX_TOOL_LOOPS):
             # Rede de segurança: se o modelo econômico não resolveu em várias
@@ -399,7 +402,7 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
             kwargs = dict(
                 model=modelo,
                 max_tokens=8192,
-                system=_system_prompt(consulta),
+                system=_system_prompt(consulta, aviso_retry),
                 tools=tools.TOOLS,
                 messages=msgs,
             )
@@ -410,7 +413,16 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
             if forcar_tool:
                 kwargs["tool_choice"] = {"type": "any"}  # só nesta chamada: PRECISA usar ferramenta
                 forcar_tool = False
-            resp = _client.messages.create(**kwargs)
+            try:
+                resp = _client.messages.create(**kwargs)
+            except anthropic.BadRequestError as e:
+                if "tool_choice" not in kwargs or "tool_choice" not in str(e):
+                    raise
+                # A API recusou forçar ferramenta nesta combinação: refaz sem o
+                # forçamento, só com o aviso no prompt (já vai em aviso_retry).
+                log.warning("API recusou tool_choice forçado (%s); refazendo só com o aviso", e)
+                kwargs.pop("tool_choice")
+                resp = _client.messages.create(**kwargs)
             costs.record_anthropic(resp.usage, modelo)
             msgs.append({"role": "assistant", "content": resp.content})
             log.info("API modelo=%s stop=%s blocos=%s [chat=%s]",
@@ -483,6 +495,11 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
                 del msgs[checkpoint:]  # descarta a resposta mentirosa; o histórico não aprende com ela
                 retentou = True
                 forcar_tool = True
+                aviso_retry = (
+                    "Na tentativa anterior você respondeu que tinha registrado/feito o que o Állan "
+                    "pediu, mas NÃO chamou nenhuma ferramenta — então NADA foi salvo. Chame AGORA a "
+                    "ferramenta certa para fazer de verdade e só depois confirme."
+                )
                 continue
 
             return texto
