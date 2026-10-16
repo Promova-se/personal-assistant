@@ -10,7 +10,8 @@ import base64
 import json
 import logging
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import anthropic
@@ -114,6 +115,17 @@ def _system_prompt(consulta: str = "") -> list[dict]:
         "R$800 em lazer por mês'), salve com fin_budget_set; fin_budget_list mostra o que "
         "já foi definido. Ao comentar o financeiro, aponte proativamente categorias perto "
         "ou acima do orçamento e sugira ajustes — esse é o papel de conselheiro financeiro.\n\n"
+        "REGRA DE OURO DOS REGISTROS: só diga 'registrado/anotado/salvo/agendado/apagado' se "
+        "você CHAMOU a ferramenta correspondente NESTA resposta e ela deu certo. Se o Állan "
+        "pediu pra registrar (refeição, treino, gasto, lembrete, evento), chame a ferramenta "
+        "SEMPRE — mesmo que pareça repetido de antes: o histórico da conversa NÃO é o banco "
+        "de dados. Se um resumo não mostra algo que ele acabou de mandar registrar, NÃO invente "
+        "explicação (fuso, servidor, sincronização, data errada): diga com franqueza que não "
+        "está salvo e registre agora.\n"
+        "DATAS: cada fala do Állan vem com [dia da semana dd/mm hh:mm] no começo — é só "
+        "referência (não repita nas respostas). 'Hoje', 'ontem' e 'amanhã' ditos em mensagens "
+        "ANTIGAS do histórico se referem ao dia daquela mensagem; pra tudo que ele pedir agora, "
+        "use sempre as datas de 'Agora' (hoje/ontem/anteontem) no fim deste prompt.\n\n"
         "CORRIGIR/APAGAR: você PODE editar e apagar registros. Para achar o item certo, "
         "liste primeiro (diet_summary / fin_summary / ex_summary / gcal_list_events) e use "
         "o #id mostrado. Dieta: diet_edit / diet_delete. Financeiro e exercícios: entry_edit "
@@ -182,8 +194,13 @@ def _system_prompt(consulta: str = "") -> list[dict]:
     )
     # Bloco estável (cacheado) + bloco volátil (hora + memória, não cacheado).
     # Isso reduz muito o custo: o "manual" repetido é reaproveitado a ~10%.
-    agora = datetime.now(ZoneInfo(config.TIMEZONE)).strftime("%A, %d/%m/%Y %H:%M")
-    volatil = f"Agora: {agora} ({config.TIMEZONE})."
+    dt = _agora()
+    ontem, anteontem = dt - timedelta(days=1), dt - timedelta(days=2)
+    volatil = (
+        f"Agora: {_DIAS[dt.weekday()]}, {dt:%d/%m/%Y %H:%M} ({config.TIMEZONE}). "
+        f"Hoje = {dt:%d/%m/%Y}; ontem = {ontem:%d/%m/%Y} ({_DIAS[ontem.weekday()]}); "
+        f"anteontem = {anteontem:%d/%m/%Y}."
+    )
     perfil = memory.load()
     if perfil:
         volatil += "\n\n## O que você já sabe sobre o Állan (memória)\n" + perfil
@@ -256,6 +273,43 @@ def _split_audio_marker(raw: str) -> tuple[str, bool]:
     return raw, False
 
 
+_DIAS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+
+
+def _agora() -> datetime:
+    return datetime.now(ZoneInfo(config.TIMEZONE))
+
+
+def _carimbo(dt: datetime | None = None) -> str:
+    """'qui 15/10 22:28' — vai no começo de cada fala do Állan no histórico. Numa
+    conversa que atravessa a meia-noite, 'hoje'/'ontem' ditos antes passam a
+    significar outro dia; com o carimbo o bot não se confunde (foi o que
+    aconteceu em 15→16/10: ele consultou o dia 14 quando 'ontem' era o 15)."""
+    dt = dt or _agora()
+    return f"{_DIAS[dt.weekday()][:3]} {dt:%d/%m %H:%M}"
+
+
+# Pedido de AÇÃO em imperativo ("registra o almoço", "anota isso", "apaga aquele").
+_PEDIDO_ACAO = re.compile(
+    r"\b(" + "|".join(
+        "registra registre registrar anota anote anotar lança lance lançar lanca adiciona "
+        "adicione adicionar acrescenta acrescente acrescentar coloca coloque colocar inclui "
+        "inclua incluir salva salve salvar agenda agende agendar apaga apague apagar remove "
+        "remova remover exclui exclua excluir corrige corrija corrigir atualiza atualize "
+        "atualizar".split()
+    ) + r")\b",
+    re.I,
+)
+# O bot AFIRMANDO que fez uma ação ("Registrado!", "Anotei", "Agendado").
+_CONFIRMA_ACAO = re.compile(
+    r"\b(registrad[oa]s?|registrei|anotad[oa]s?|anotei|lançad[oa]s?|lancei|salvei|salvad[oa]s?|"
+    r"adicionad[oa]s?|adicionei|acrescentad[oa]s?|acrescentei|agendad[oa]s?|agendei|"
+    r"apagad[oa]s?|apaguei|removid[oa]s?|removi|exclu[ií]d[oa]s?|atualizad[oa]s?|atualizei|"
+    r"corrigid[oa]s?|corrigi)\b",
+    re.I,
+)
+
+
 def handle_message(
     chat_id: int,
     text: str,
@@ -265,6 +319,7 @@ def handle_message(
     """Processa uma mensagem do usuário (texto e/ou imagem). Devolve (resposta,
     quer_audio) — quer_audio indica se deve ser enviada como voz."""
     msgs = _get_history(chat_id)
+    carimbo = f"[{_carimbo()}] "  # dia/hora da fala, p/ 'hoje'/'ontem' não se confundirem
 
     img_idx = -1
     if image_bytes:
@@ -272,10 +327,10 @@ def handle_message(
         # exige mais qualidade de visão do que vale a pena arriscar no econômico.
         modelo = config.MODEL
         b64 = base64.standard_b64encode(image_bytes).decode()
-        legenda = text or (
+        legenda = carimbo + (text or (
             "Analise esta imagem. Se for comida, registre a refeição; se for um "
             "evento/convite, crie na agenda. Se faltar dado, me pergunte."
-        )
+        ))
         img_idx = len(msgs)
         msgs.append(
             {
@@ -295,7 +350,7 @@ def handle_message(
         )
     else:
         modelo = _escolher_modelo(text)
-        msgs.append({"role": "user", "content": text})
+        msgs.append({"role": "user", "content": carimbo + text})
 
     raw = _run(msgs, chat_id, modelo)
     resposta, quer_audio = _split_audio_marker(raw)
@@ -303,9 +358,9 @@ def handle_message(
     # Depois de processada, troca a imagem (pesada) por uma nota curta no
     # histórico — evita reenviar a foto nas próximas mensagens.
     if img_idx >= 0:
-        msgs[img_idx] = {"role": "user", "content": "[Enviei uma foto para você analisar.]"}
+        msgs[img_idx] = {"role": "user", "content": carimbo + "[Enviei uma foto para você analisar.]"}
 
-    _save_turn(chat_id, text or "[foto]", resposta)
+    _save_turn(chat_id, carimbo + (text or "[foto]"), resposta)
     _trim(chat_id)
     return resposta, quer_audio
 
@@ -323,6 +378,14 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
     # Últimas falas do Állan (incluindo a atual): usadas pra trazer, já no
     # contexto, o material salvo que elas tocam (ex: "abastecimento" → carro).
     consulta = _consulta_de(msgs)
+    # Trava contra "Registrado!" sem registrar (aconteceu em 15/10: 3 refeições
+    # confirmadas pelo bot e nenhuma gravada). Se o Állan pediu uma AÇÃO e o bot
+    # responde dizendo que fez, sem ter chamado nenhuma ferramenta, a resposta é
+    # descartada e refeita UMA vez obrigando o uso de ferramenta.
+    pediu_acao = bool(_PEDIDO_ACAO.search(_consulta_de(msgs, 1)))
+    chamou_tool = False
+    retentou = False
+    forcar_tool = False
     try:
         for i in range(MAX_TOOL_LOOPS):
             # Rede de segurança: se o modelo econômico não resolveu em várias
@@ -344,11 +407,17 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
                 # "effort" (esforço de raciocínio) só existe no Sonnet/Opus;
                 # o Haiku rejeita esse parâmetro com erro 400.
                 kwargs["output_config"] = {"effort": "low"}
+            if forcar_tool:
+                kwargs["tool_choice"] = {"type": "any"}  # só nesta chamada: PRECISA usar ferramenta
+                forcar_tool = False
             resp = _client.messages.create(**kwargs)
             costs.record_anthropic(resp.usage, modelo)
             msgs.append({"role": "assistant", "content": resp.content})
+            log.info("API modelo=%s stop=%s blocos=%s [chat=%s]",
+                     modelo, resp.stop_reason, [b.type for b in resp.content], chat_id)
 
             if resp.stop_reason == "tool_use":
+                chamou_tool = True
                 resultados = []
                 for bloco in resp.content:
                     if bloco.type == "tool_use":
@@ -366,6 +435,7 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
             # Ferramentas do servidor (busca web/execução de código) podem
             # pausar; reenvia pra continuar de onde parou
             if resp.stop_reason == "pause_turn":
+                chamou_tool = True
                 continue
 
             texto = "".join(b.text for b in resp.content if b.type == "text").strip()
@@ -405,6 +475,16 @@ def _run(msgs: list[dict], chat_id: int, model: str | None = None) -> str:
                     return _run(msgs, chat_id, config.MODEL)
                 return "Não consegui formular uma resposta agora. Pode tentar reformular?"
 
+            if pediu_acao and not chamou_tool and not retentou and _CONFIRMA_ACAO.search(texto):
+                log.warning(
+                    "Resposta confirma ação SEM chamar ferramenta — refazendo com tool_choice=any "
+                    "(chat=%s, modelo=%s): %r", chat_id, modelo, texto[:160],
+                )
+                del msgs[checkpoint:]  # descarta a resposta mentirosa; o histórico não aprende com ela
+                retentou = True
+                forcar_tool = True
+                continue
+
             return texto
 
         # Excedeu o limite de passos: pode haver um bloco de ferramenta do
@@ -443,10 +523,10 @@ def handle_document(
 
     # No histórico real, guarda só um registro compacto + a resposta
     msgs.append(
-        {"role": "user", "content": f"[Enviei o documento '{filename}' e pedi um resumo/análise.]"}
+        {"role": "user", "content": f"[{_carimbo()}] [Enviei o documento '{filename}' e pedi um resumo/análise.]"}
     )
     msgs.append({"role": "assistant", "content": resposta})
-    _save_turn(chat_id, f"[documento: {filename}]", resposta)
+    _save_turn(chat_id, f"[{_carimbo()}] [documento: {filename}]", resposta)
     _trim(chat_id)
     return resposta, quer_audio
 
@@ -479,10 +559,10 @@ def handle_pdf(
 
     # No histórico real, guarda só um registro compacto + a resposta
     msgs.append(
-        {"role": "user", "content": f"[Enviei o PDF '{filename}' e pedi um resumo/análise.]"}
+        {"role": "user", "content": f"[{_carimbo()}] [Enviei o PDF '{filename}' e pedi um resumo/análise.]"}
     )
     msgs.append({"role": "assistant", "content": resposta})
-    _save_turn(chat_id, f"[pdf: {filename}]", resposta)
+    _save_turn(chat_id, f"[{_carimbo()}] [pdf: {filename}]", resposta)
     _trim(chat_id)
     return resposta, quer_audio
 
